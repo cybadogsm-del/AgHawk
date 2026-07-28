@@ -1,4 +1,14 @@
 import streamlit as st
+# --- MAIN MENU SIDEBAR ---
+st.sidebar.title("Navigation")
+menu_selection = st.sidebar.radio("Main Menu:", [
+    "📊 Pipeline Dashboard", 
+    "➕ Enter New Order", 
+    "👥 Manage Customers", 
+    "⚙️ System Settings"
+])
+st.sidebar.divider()
+
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
