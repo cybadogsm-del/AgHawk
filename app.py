@@ -112,8 +112,7 @@ def row_color(row):
 # Display the color-coded table
 if not df.empty:
     styled_df = df.style.apply(row_color, axis=1)
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
-else:
+    selection_event = st.dataframe(styled_df, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
     st.info("No orders in the system.")
 
 st.divider()
