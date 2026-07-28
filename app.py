@@ -112,7 +112,7 @@ def row_color(row):
 # Display the color-coded table
 if not df.empty:
     styled_df = df.style.apply(row_color, axis=1)
-    st.data_editor(styled_df, num_rows="dynamic", use_container_width=True, hide_index=True)
+    st.datafram(styled_df, num_rows="dynamic", use_container_width=True, hide_index=True)
 else:
     st.info("No orders in the system.")
 
