@@ -171,3 +171,11 @@ new_status = st.selectbox("New Status:", ["Pending", "Harvested", "Installed", "
 
 if st.button("Save Changes"):
     st.success("Button clicked! We will connect this to the database next.")
+st.divider()
+selected_row = selection_event.selection.rows
+
+if selected_row:
+    st.subheader("📝 Edit Selected Order")
+    st.success("Perfect! You highlighted a row. Next, we will build the actual database-style form right here using your exact columns.")
+else:
+    st.info("👆 Click on any order row in the table above to view its full details.")
