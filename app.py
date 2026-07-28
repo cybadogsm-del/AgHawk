@@ -1,4 +1,10 @@
 import streamlit as st
+import pandas as pd
+import sqlite3
+from pathlib import Path
+
+st.set_page_config(page_title="Turf Galore Sched", layout="wide")
+
 # --- MAIN MENU SIDEBAR ---
 st.sidebar.title("Navigation")
 menu_selection = st.sidebar.radio("Main Menu:", [
@@ -9,21 +15,12 @@ menu_selection = st.sidebar.radio("Main Menu:", [
 ])
 st.sidebar.divider()
 
-import pandas as pd
-import sqlite3
-from datetime import datetime, timedelta
-from pathlib import Path
-
-st.set_page_config(page_title="Turf Galore Sched", layout="wide")
-
 # --- DATABASE SETUP ---
 DB_PATH = Path("turf_orders.db")
 
 def init_database():
-    """Initialize SQLite database with orders table"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,13 +33,9 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
     # Check if we need to seed initial data
     cursor.execute("SELECT COUNT(*) FROM orders")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        # Insert initial sample data
+    if cursor.fetchone()[0] == 0:
         initial_orders = [
             ("EXCELL GRAY", "Kikuyu", 1800, "2026-06-28", "2026-06-29", "Locked"),
             ("FLEMINGS", "Kikuyu", 1500, "", "", "Pending")
@@ -52,44 +45,21 @@ def init_database():
             VALUES (?, ?, ?, ?, ?, ?)
         """, initial_orders)
         conn.commit()
-    
     conn.close()
 
 def get_all_orders():
-    """Fetch all orders from database"""
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT id, customer, variety, m2_area, harvest_date, install_date, status
-        FROM orders ORDER BY created_at DESC
-    """)
-    
-    orders = []
-    for row in cursor.fetchall():
-        orders.append({
-            "id": row[0],
-            "customer": row[1],
-            "variety": row[2],
-            "m2_area": row[3],
-            "harvest_date": row[4],
-            "install_date": row[5],
-            "status": row[6]
-        })
-    
+    df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
     conn.close()
-    return orders
+    return df
 
 def add_order(customer, variety, m2_area, harvest_date, install_date, status):
-    """Add new order to database"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     cursor.execute("""
         INSERT INTO orders (customer, variety, m2_area, harvest_date, install_date, status)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (customer, variety, m2_area, harvest_date, install_date, status))
-    
     order_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -98,94 +68,76 @@ def add_order(customer, variety, m2_area, harvest_date, install_date, status):
 # Initialize database on app start
 init_database()
 
-# --- DYNAMIC LISTS (From Config) ---
+# --- DYNAMIC LISTS ---
 customers = ["EXCELL GRAY", "FLEMINGS", "NEDGE", "GREEN CONCEPTS"]
 pallet_options = [60, 70, 80]
 varieties = ["Kikuyu", "Santa Anna Couch", "Buffalo"]
 
-st.title("🚜 Turf Galore Sched — Ops Dashboard")
+# --- ROUTING LOGIC BASED ON MENU ---
 
-# --- 1. THE MASTER PIPELINE (COLOR-CODED) ---
-st.subheader("Master Juggling Pipeline")
-
-# Load orders from database
-orders = get_all_orders()
-df = pd.DataFrame(orders)
-
-def row_color(row):
-    # Green if it has dates, Yellow if pending
-    if row['harvest_date'] != "" and row['install_date'] != "":
-        return ['background-color: #d4edda; color: black'] * len(row)
-    else:
-        return ['background-color: #fff3cd; color: black'] * len(row)
-
-# Display the color-coded table
-if not df.empty:
-    styled_df = df.style.apply(row_color, axis=1)
-    selection_event = st.dataframe(styled_df, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
-    st.info("No orders in the system.")
-
-st.divider()
-
-# --- 2. ORDER ENTRY FORM ---
-st.subheader("Queue New Order")
-
-with st.form("new_order_form"):
-    col1, col2 = st.columns(2)
+if menu_selection == "📊 Pipeline Dashboard":
+    st.title("🚜 Turf Galore Sched — Ops Dashboard")
+    st.subheader("Master Juggling Pipeline")
     
-    with col1:
-        selected_customer = st.selectbox("Customer Name", customers)
-        variety = st.selectbox("Turf Variety", varieties)
-        m2_area = st.number_input("Total M2 Area Required", min_value=0, step=10, value=0)
-        selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options)
-        
-    with col2:
-        tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=True)
-        if not tba_dates:
-            harvest_date = st.date_input("Confirmed Harvest Date")
-            install_date = st.date_input("Confirmed Install Date")
-        else:
-            harvest_date = None
-            install_date = None
-
-    if st.form_submit_button("Add to Schedule"):
-        # Run pallet math
-        if m2_area > 0 and selected_pallet > 0:
-            full_pallets = int(m2_area // selected_pallet)
-            loose_rolls = int(m2_area % selected_pallet)
-        else:
-            full_pallets, loose_rolls = 0, 0
+    df = get_all_orders()
+    
+    if df.empty:
+        st.info("No orders in the system.")
+    else:
+        def row_color(row):
+            if row['harvest_date'] != "" and row['install_date'] != "":
+                return ['background-color: #d4edda; color: black'] * len(row)
+            return ['background-color: #fff3cd; color: black'] * len(row)
             
-        # Prepare data for database
-        harvest_str = harvest_date.strftime("%Y-%m-%d") if harvest_date else ""
-        install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
-        status = "Locked" if harvest_date else "Pending"
-        
-        # Add to database
-        order_id = add_order(
-            selected_customer, variety, m2_area, 
-            harvest_str, install_str, status
+        styled_df = df.style.apply(row_color, axis=1)
+        selection_event = st.dataframe(
+            styled_df, 
+            use_container_width=True, 
+            hide_index=True, 
+            on_select="rerun", 
+            selection_mode="single-row"
         )
         
-        st.success(f"Added Order #{order_id}! Calculated {full_pallets} full pallets + {loose_rolls} loose rolls.")
-        st.rerun()  # Refresh to show new data
+        st.divider()
+        selected_row = selection_event.selection.rows
+        
+        if selected_row:
+            selected_data = df.iloc[selected_row[0]]
+            st.subheader(f"📝 Edit Order #{selected_data['id']} - {selected_data['customer']}")
+            st.success("Perfect! You highlighted a row. Next, we will add the 'Amount Installed' math right here!")
+        else:
+            st.info("👆 Click on any order row in the table above to view its full details.")
 
-# --- 3. DATABASE INFO ---
-st.divider()
-st.caption(f"📁 Data stored in: {DB_PATH.absolute()}")
-st.divider()
-st.subheader("📝 Update an Order")
+elif menu_selection == "➕ Enter New Order":
+    st.title("➕ Queue New Order")
+    with st.form("new_order_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_customer = st.selectbox("Customer Name", customers)
+            variety = st.selectbox("Turf Variety", varieties)
+            m2_area = st.number_input("Total M2 Area Required", min_value=0, step=10, value=0)
+            selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options)
+        with col2:
+            tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=True)
+            if not tba_dates:
+                harvest_date = st.date_input("Confirmed Harvest Date")
+                install_date = st.date_input("Confirmed Install Date")
+            else:
+                harvest_date = None
+                install_date = None
 
-edit_id = st.text_input("Type the Order ID number you want to edit:")
-new_status = st.selectbox("New Status:", ["Pending", "Harvested", "Installed", "Cancelled"])
+        if st.form_submit_button("Add to Schedule"):
+            harvest_str = harvest_date.strftime("%Y-%m-%d") if harvest_date else ""
+            install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
+            status = "Locked" if harvest_date else "Pending"
+            
+            order_id = add_order(selected_customer, variety, m2_area, harvest_str, install_str, status)
+            st.success(f"Added Order #{order_id} successfully!")
 
-if st.button("Save Changes"):
-    st.success("Button clicked! We will connect this to the database next.")
-st.divider()
-selected_row = selection_event.selection.rows
+elif menu_selection == "👥 Manage Customers":
+    st.title("👥 Manage Customers")
+    st.info("Customer management tools will go here.")
 
-if selected_row:
-    st.subheader("📝 Edit Selected Order")
-    st.success("Perfect! You highlighted a row. Next, we will build the actual database-style form right here using your exact columns.")
-else:
-    st.info("👆 Click on any order row in the table above to view its full details.")
+elif menu_selection == "⚙️ System Settings":
+    st.title("⚙️ System Settings")
+    st.info("System settings and lists will go here.")
