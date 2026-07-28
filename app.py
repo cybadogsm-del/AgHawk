@@ -15,8 +15,8 @@ menu_selection = st.sidebar.radio("Main Menu:", [
 ])
 st.sidebar.divider()
 
-# --- DATABASE SETUP ---
-DB_PATH = Path("turf_orders.db")
+# --- DATABASE SETUP (Upgraded to v2 for new math fields) ---
+DB_PATH = Path("turf_orders_v2.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
@@ -30,19 +30,21 @@ def init_database():
             harvest_date TEXT DEFAULT '',
             install_date TEXT DEFAULT '',
             status TEXT NOT NULL DEFAULT 'Pending',
+            amount_installed INTEGER DEFAULT 0,
+            remaining_balance INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Check if we need to seed initial data
+    # Seed initial data if empty
     cursor.execute("SELECT COUNT(*) FROM orders")
     if cursor.fetchone()[0] == 0:
         initial_orders = [
-            ("EXCELL GRAY", "Kikuyu", 1800, "2026-06-28", "2026-06-29", "Locked"),
-            ("FLEMINGS", "Kikuyu", 1500, "", "", "Pending")
+            ("EXCELL GRAY", "Kikuyu", 1800, "2026-06-28", "2026-06-29", "Locked", 0, 1800),
+            ("FLEMINGS", "Kikuyu", 1500, "", "", "Pending", 0, 1500)
         ]
         cursor.executemany("""
-            INSERT INTO orders (customer, variety, m2_area, harvest_date, install_date, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO orders (customer, variety, m2_area, harvest_date, install_date, status, amount_installed, remaining_balance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, initial_orders)
         conn.commit()
     conn.close()
@@ -57,9 +59,9 @@ def add_order(customer, variety, m2_area, harvest_date, install_date, status):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO orders (customer, variety, m2_area, harvest_date, install_date, status)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (customer, variety, m2_area, harvest_date, install_date, status))
+        INSERT INTO orders (customer, variety, m2_area, harvest_date, install_date, status, amount_installed, remaining_balance)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+    """, (customer, variety, m2_area, harvest_date, install_date, status, m2_area))
     order_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -85,9 +87,11 @@ if menu_selection == "📊 Pipeline Dashboard":
         st.info("No orders in the system.")
     else:
         def row_color(row):
-            if row['harvest_date'] != "" and row['install_date'] != "":
-                return ['background-color: #d4edda; color: black'] * len(row)
-            return ['background-color: #fff3cd; color: black'] * len(row)
+            if row['status'] == 'Installed':
+                return ['background-color: #e2e3e5; color: #6c757d'] * len(row) # Grey for completed
+            elif row['harvest_date'] != "" and row['install_date'] != "":
+                return ['background-color: #d4edda; color: black'] * len(row) # Green for scheduled
+            return ['background-color: #fff3cd; color: black'] * len(row) # Yellow for pending
             
         styled_df = df.style.apply(row_color, axis=1)
         selection_event = st.dataframe(
@@ -103,10 +107,45 @@ if menu_selection == "📊 Pipeline Dashboard":
         
         if selected_row:
             selected_data = df.iloc[selected_row[0]]
-            st.subheader(f"📝 Edit Order #{selected_data['id']} - {selected_data['customer']}")
-            st.success("Perfect! You highlighted a row. Next, we will add the 'Amount Installed' math right here!")
+            order_id = int(selected_data['id'])
+            
+            st.subheader(f"📝 Edit Order #{order_id} - {selected_data['customer']}")
+            
+            with st.form("edit_order_form"):
+                st.write(f"**Total Area Ordered:** {selected_data['m2_area']} M2")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    current_installed = int(selected_data['amount_installed'])
+                    new_installed = st.number_input("Total Amount Installed (M2)", min_value=0, value=current_installed, step=10)
+                
+                with col2:
+                    # Auto-calculate, but allow the Ops Manager to manually override it!
+                    auto_remaining = int(selected_data['m2_area']) - new_installed
+                    new_remaining = st.number_input("Remaining Balance (M2) - Manual Override", value=auto_remaining, step=1)
+                
+                # Setup statuses safely
+                status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
+                current_status = selected_data['status']
+                if current_status not in status_options:
+                    current_status = "Pending"
+                
+                new_status = st.selectbox("Update Status", status_options, index=status_options.index(current_status))
+
+                if st.form_submit_button("Save Order Updates"):
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE orders 
+                        SET amount_installed = ?, remaining_balance = ?, status = ?
+                        WHERE id = ?
+                    """, (new_installed, new_remaining, new_status, order_id))
+                    conn.commit()
+                    conn.close()
+                    st.success("Order updated successfully!")
+                    st.rerun()
         else:
-            st.info("👆 Click on any order row in the table above to view its full details.")
+            st.info("👆 Click on any order row in the table above to view and edit its details.")
 
 elif menu_selection == "➕ Enter New Order":
     st.title("➕ Queue New Order")
