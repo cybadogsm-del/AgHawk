@@ -94,12 +94,26 @@ if menu_selection == "📊 Pipeline Dashboard":
             return ['background-color: #fff3cd; color: black'] * len(row) # Yellow for pending
             
         styled_df = df.style.apply(row_color, axis=1)
+        
+        # We add formatting here to make the table headers neat and fit the screen perfectly!
         selection_event = st.dataframe(
             styled_df, 
             use_container_width=True, 
             hide_index=True, 
             on_select="rerun", 
-            selection_mode="single-row"
+            selection_mode="single-row",
+            column_config={
+                "id": "ID",
+                "customer": "Customer",
+                "variety": "Turf Variety",
+                "m2_area": "Total M2",
+                "harvest_date": "Harvest",
+                "install_date": "Install",
+                "status": "Status",
+                "amount_installed": "Installed M2",
+                "remaining_balance": "Remaining M2",
+                "created_at": None  # This hides the messy database timestamp!
+            }
         )
         
         st.divider()
@@ -111,39 +125,38 @@ if menu_selection == "📊 Pipeline Dashboard":
             
             st.subheader(f"📝 Edit Order #{order_id} - {selected_data['customer']}")
             
-            with st.form("edit_order_form"):
-                st.write(f"**Total Area Ordered:** {selected_data['m2_area']} M2")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    current_installed = int(selected_data['amount_installed'])
-                    new_installed = st.number_input("Total Amount Installed (M2)", min_value=0, value=current_installed, step=10)
-                
-                with col2:
-                    # Auto-calculate, but allow the Ops Manager to manually override it!
-                    auto_remaining = int(selected_data['m2_area']) - new_installed
-                    new_remaining = st.number_input("Remaining Balance (M2) - Manual Override", value=auto_remaining, step=1)
-                
-                # Setup statuses safely
-                status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
-                current_status = selected_data['status']
-                if current_status not in status_options:
-                    current_status = "Pending"
-                
-                new_status = st.selectbox("Update Status", status_options, index=status_options.index(current_status))
+            st.write(f"**Total Area Ordered:** {selected_data['m2_area']} M2")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                current_installed = int(selected_data['amount_installed'])
+                new_installed = st.number_input("Total Amount Installed (M2)", min_value=0, value=current_installed, step=10)
+            
+            with col2:
+                # Math happens instantly now!
+                auto_remaining = int(selected_data['m2_area']) - new_installed
+                new_remaining = st.number_input("Remaining Balance (M2) - Manual Override", value=auto_remaining, step=1)
+            
+            status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
+            current_status = selected_data['status']
+            if current_status not in status_options:
+                current_status = "Pending"
+            
+            new_status = st.selectbox("Update Status", status_options, index=status_options.index(current_status))
 
-                if st.form_submit_button("Save Order Updates"):
-                    conn = sqlite3.connect(DB_PATH)
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        UPDATE orders 
-                        SET amount_installed = ?, remaining_balance = ?, status = ?
-                        WHERE id = ?
-                    """, (new_installed, new_remaining, new_status, order_id))
-                    conn.commit()
-                    conn.close()
-                    st.success("Order updated successfully!")
-                    st.rerun()
+            # Changed from form submit to a standard button
+            if st.button("Save Order Updates"):
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE orders 
+                    SET amount_installed = ?, remaining_balance = ?, status = ?
+                    WHERE id = ?
+                """, (new_installed, new_remaining, new_status, order_id))
+                conn.commit()
+                conn.close()
+                st.success("Order updated successfully!")
+                st.rerun()
         else:
             st.info("👆 Click on any order row in the table above to view and edit its details.")
 
