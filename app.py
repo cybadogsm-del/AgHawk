@@ -164,3 +164,11 @@ with st.form("new_order_form"):
 # --- 3. DATABASE INFO ---
 st.divider()
 st.caption(f"📁 Data stored in: {DB_PATH.absolute()}")
+st.divider()
+st.subheader("📝 Update an Order")
+
+edit_id = st.text_input("Type the Order ID number you want to edit:")
+new_status = st.selectbox("New Status:", ["Pending", "Harvested", "Installed", "Cancelled"])
+
+if st.button("Save Changes"):
+    st.success("Button clicked! We will connect this to the database next.")
