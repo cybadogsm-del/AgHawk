@@ -20,18 +20,16 @@ st.sidebar.divider()
 # --- DYNAMIC MAIN MENU ---
 st.sidebar.title("Navigation")
 
-# Adjust the available menu options based on the exact roles you defined!
 if user_role == "👑 Ops Manager/Admin":
     menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet", "➕ Enter New Order", "👥 Manage Customers", "⚙️ System Settings"]
 else: 
-    # Everyone else gets view access to the schedule boards
     menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet"]
 
 menu_selection = st.sidebar.radio("Main Menu:", menu_options)
 st.sidebar.divider()
 
-# --- DATABASE SETUP (v9) ---
-DB_PATH = Path("turf_orders_v9.db")
+# --- DATABASE SETUP (v10 - Added Services, Transport, & PO) ---
+DB_PATH = Path("turf_orders_v10.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
@@ -41,10 +39,13 @@ def init_database():
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             customer TEXT NOT NULL,
+            purchase_order TEXT DEFAULT '',
             site_address TEXT DEFAULT '',
             site_contact TEXT DEFAULT '',
             contact_phone TEXT DEFAULT '',
             special_instructions TEXT DEFAULT '',
+            service_type TEXT DEFAULT '',
+            transport_detail TEXT DEFAULT '',
             variety TEXT NOT NULL,
             m2_area INTEGER NOT NULL,
             pallet_size INTEGER DEFAULT 60,
@@ -65,6 +66,7 @@ def init_database():
     cursor.execute("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS varieties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS pallet_sizes (id INTEGER PRIMARY KEY AUTOINCREMENT, size INTEGER UNIQUE NOT NULL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS transport_options (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     
     cursor.execute("SELECT COUNT(*) FROM customers")
     if cursor.fetchone()[0] == 0:
@@ -73,6 +75,8 @@ def init_database():
         cursor.execute("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", ("123 Spring St, Melbourne", "Dave Foreman", "0412 345 678"))
         cursor.executemany("INSERT INTO varieties (name) VALUES (?)", [("Kikuyu",), ("Santa Anna Couch",), ("Buffalo",)])
         cursor.executemany("INSERT INTO pallet_sizes (size) VALUES (?)", [(60,), (70,), (80,)])
+        # Seed initial transport options
+        cursor.executemany("INSERT INTO transport_options (name) VALUES (?)", [("Fleet Truck #1",), ("Fleet Truck #2",), ("Subbie - John Doe Transport",), ("TBA",)])
 
     conn.commit()
     conn.close()
@@ -94,8 +98,9 @@ def get_contacts_for_site(site_address):
     return [{"name": r[0], "phone": r[1]} for r in rows]
 def get_varieties(): return [row[0] for row in run_query("SELECT name FROM varieties ORDER BY name ASC")]
 def get_pallet_sizes(): return [row[0] for row in run_query("SELECT size FROM pallet_sizes ORDER BY size ASC")]
+def get_transport_options(): return [row[0] for row in run_query("SELECT name FROM transport_options ORDER BY name ASC")]
 
-def save_new_order(customer, site, contact, phone, special, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status):
+def save_new_order(customer, po, site, contact, phone, special, service, transport, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status):
     existing_sites = get_sites_for_customer(customer)
     if site not in existing_sites and site.strip() != "":
         run_query("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", (customer, site))
@@ -106,10 +111,10 @@ def save_new_order(customer, site, contact, phone, special, variety, m2_area, pa
             run_query("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", (site, contact, phone))
             
     query = """
-        INSERT INTO orders (customer, site_address, site_contact, contact_phone, special_instructions, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest_date, install_date, status, amount_harvested, amount_installed, remaining_balance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+        INSERT INTO orders (customer, purchase_order, site_address, site_contact, contact_phone, special_instructions, service_type, transport_detail, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest_date, install_date, status, amount_harvested, amount_installed, remaining_balance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
     """
-    run_query(query, (customer, site, contact, phone, special, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status, m2_area))
+    run_query(query, (customer, po, site, contact, phone, special, service, transport, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status, m2_area))
 
 # Initialize database on app start
 init_database()
@@ -117,6 +122,8 @@ init_database()
 # --- DYNAMIC LISTS ---
 pallet_options = get_pallet_sizes()
 varieties = get_varieties()
+transport_list = get_transport_options()
+service_options = ["Supply Only", "Supply & Deliver", "Supply & Install"]
 
 # --- ROUTING LOGIC BASED ON MENU ---
 
@@ -150,12 +157,14 @@ if menu_selection == "📊 Pipeline Dashboard":
             styled_df, 
             use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
             column_config={
-                "id": "ID", "customer": "Customer", "site_address": "Site", "site_contact": None, 
-                "contact_phone": None, "special_instructions": "Notes", "variety": "Variety", "m2_area": "Total M2",
-                "pallet_size": None, "full_pallets": "Pallets", "loose_rolls": "Loose Rolls",
+                "id": "ID", "customer": "Customer", "purchase_order": "PO #", "site_address": "Site", 
+                "site_contact": None, "contact_phone": None, "special_instructions": None, 
+                "service_type": "Service", "transport_detail": "Transport",
+                "variety": "Variety", "m2_area": "Total M2",
+                "pallet_size": None, "full_pallets": "Pallets", "loose_rolls": "Loose",
                 "harvest_date": "Harvest", "install_date": "Install", "status": "Status",
-                "amount_harvested": "Harvested M2", "amount_installed": "Installed M2", 
-                "remaining_balance": "Remaining M2", "created_at": None
+                "amount_harvested": "Harv. M2", "amount_installed": "Inst. M2", 
+                "remaining_balance": "Rem. M2", "created_at": None
             }
         )
         st.divider()
@@ -166,6 +175,7 @@ if menu_selection == "📊 Pipeline Dashboard":
             order_id = int(selected_data['id'])
             st.subheader(f"📝 Order #{order_id} Details")
             
+            # Show notes to everyone!
             if selected_data['special_instructions'] != "":
                 st.info(f"**Special Instructions:** {selected_data['special_instructions']}")
             
@@ -173,6 +183,9 @@ if menu_selection == "📊 Pipeline Dashboard":
                 st.warning("Read-Only Mode: Your access level only permits viewing the schedule.")
             else:
                 new_instructions = selected_data['special_instructions']
+                new_po = selected_data['purchase_order']
+                new_service = selected_data['service_type']
+                new_transport = selected_data['transport_detail']
                 new_pallet_size = int(selected_data['pallet_size'])
                 new_harvested = int(selected_data['amount_harvested'])
                 new_installed = int(selected_data['amount_installed'])
@@ -181,6 +194,11 @@ if menu_selection == "📊 Pipeline Dashboard":
 
                 if user_role == "👑 Ops Manager/Admin":
                     st.write("**Admin Edit Mode** (Full Access)")
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a: new_po = st.text_input("PO #", value=new_po)
+                    with col_b: new_service = st.selectbox("Service", service_options, index=service_options.index(new_service) if new_service in service_options else 0)
+                    with col_c: new_transport = st.selectbox("Transport", transport_list, index=transport_list.index(new_transport) if new_transport in transport_list else 0)
+                    
                     new_instructions = st.text_area("Update Special Instructions", value=new_instructions)
                     col1, col2 = st.columns(2)
                     with col1:
@@ -198,6 +216,7 @@ if menu_selection == "📊 Pipeline Dashboard":
                     col1, col2 = st.columns(2)
                     with col1:
                         new_harvested = st.number_input("Update Harvest Qty (M2)", min_value=0, value=new_harvested, step=10)
+                        new_transport = st.selectbox("Update Transport", transport_list, index=transport_list.index(new_transport) if new_transport in transport_list else 0)
                     with col2:
                         new_pallet_size = st.selectbox("Update Pallet Size", pallet_options, index=pallet_options.index(new_pallet_size) if new_pallet_size in pallet_options else 0)
                     
@@ -220,9 +239,9 @@ if menu_selection == "📊 Pipeline Dashboard":
                     
                     run_query("""
                         UPDATE orders SET 
-                        special_instructions=?, amount_harvested=?, amount_installed=?, remaining_balance=?, status=?, pallet_size=?, full_pallets=?, loose_rolls=?
+                        purchase_order=?, service_type=?, transport_detail=?, special_instructions=?, amount_harvested=?, amount_installed=?, remaining_balance=?, status=?, pallet_size=?, full_pallets=?, loose_rolls=?
                         WHERE id=?
-                    """, (new_instructions, new_harvested, new_installed, new_remaining, new_status, new_pallet_size, full_pallets, loose_rolls, order_id))
+                    """, (new_po, new_service, new_transport, new_instructions, new_harvested, new_installed, new_remaining, new_status, new_pallet_size, full_pallets, loose_rolls, order_id))
                     st.success("Order updated successfully!")
                     st.rerun()
 
@@ -235,14 +254,15 @@ elif menu_selection == "📋 Daily Run Sheet":
     target_date_str = target_date.strftime("%Y-%m-%d")
     
     conn = sqlite3.connect(DB_PATH)
-    harvests = pd.read_sql_query("SELECT customer, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
-    installs = pd.read_sql_query("SELECT customer, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
+    harvests = pd.read_sql_query("SELECT customer, purchase_order, service_type, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
+    installs = pd.read_sql_query("SELECT customer, purchase_order, service_type, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     conn.close()
     
     clean_columns = {
-        "customer": "Customer", "site_address": "Site", "site_contact": "Contact", 
-        "contact_phone": "Phone", "variety": "Variety", "m2_area": "M2", 
-        "full_pallets": "Pallets", "loose_rolls": "Loose", "special_instructions": "Notes", "status": "Status"
+        "customer": "Customer", "purchase_order": "PO#", "service_type": "Service", "transport_detail": "Transport",
+        "site_address": "Site", "site_contact": "Contact", "contact_phone": "Phone", 
+        "variety": "Variety", "m2_area": "M2", "full_pallets": "Pallets", 
+        "loose_rolls": "Loose", "special_instructions": "Notes", "status": "Status"
     }
 
     st.subheader(f"🚜 Harvests for {target_date.strftime('%d %b %Y')}")
@@ -258,22 +278,21 @@ elif menu_selection == "📋 Daily Run Sheet":
 elif menu_selection == "➕ Enter New Order":
     st.title("➕ Queue New Order")
     
-    customers = get_customers()
-    # Using index=None makes the box completely blank by default!
-    selected_customer = st.selectbox("1. Select Customer", customers, index=None, placeholder="Choose a Customer...")
+    col_cust, col_po = st.columns(2)
+    with col_cust:
+        customers = get_customers()
+        selected_customer = st.selectbox("1. Select Customer", customers, index=None, placeholder="Choose a Customer...")
+    with col_po:
+        po_number = st.text_input("Customer Purchase Order (Optional)", placeholder="e.g. PO-99214")
     
-    # Hide the site/contact boxes until a customer is actually picked
     if selected_customer:
         existing_sites = get_sites_for_customer(selected_customer)
         site_options = existing_sites + ["➕ Add New Site Address..."]
         selected_site = st.selectbox("2. Select Job Site", site_options, index=None, placeholder="Choose a Job Site...")
         
-        if selected_site == "➕ Add New Site Address...": 
-            final_site = st.text_input("Type the New Site Address:")
-        elif selected_site: 
-            final_site = selected_site
-        else:
-            final_site = ""
+        if selected_site == "➕ Add New Site Address...": final_site = st.text_input("Type the New Site Address:")
+        elif selected_site: final_site = selected_site
+        else: final_site = ""
             
         if final_site and final_site.strip() != "":
             existing_contacts = get_contacts_for_site(final_site)
@@ -295,7 +314,6 @@ elif menu_selection == "➕ Enter New Order":
             final_contact = ""
             final_phone = ""
     else:
-        # If no customer selected, set all these to empty so the form won't submit
         final_site = ""
         final_contact = ""
         final_phone = ""
@@ -304,13 +322,15 @@ elif menu_selection == "➕ Enter New Order":
     st.subheader("Turf Details & Logistics")
     col1, col2 = st.columns(2)
     with col1:
+        selected_service = st.selectbox("Service Required", service_options, index=None, placeholder="Select Service Type...")
         variety = st.selectbox("Turf Variety", varieties, index=None, placeholder="Select Turf Variety...")
         m2_area = st.number_input("Total M2 Area Required", min_value=10, step=10, value=None, placeholder="Enter total area...")
-        selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options, index=None, placeholder="Select Pallet Size...")
+        
     with col2:
+        selected_transport = st.selectbox("Transport / Fleet", transport_list, index=None, placeholder="Select Transport Details...")
+        selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options, index=None, placeholder="Select Pallet Size...")
         tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=True)
         if not tba_dates:
-            # Dates are also blank by default now
             harvest_date = st.date_input("Confirmed Harvest Date", value=None)
             install_date = st.date_input("Confirmed Install Date", value=None)
         else:
@@ -319,11 +339,12 @@ elif menu_selection == "➕ Enter New Order":
 
     special_instructions = st.text_area("Special Instructions (Optional)", placeholder="e.g., Gate code is 1234, call Dave before arriving...")
 
-    # Strict Validation: Refuse to save if the boxes are still blank
     if st.button("Save New Order & Calculate Pallets"):
         if not selected_customer: st.error("Please select a Customer!")
         elif final_site.strip() == "" or final_contact.strip() == "": st.error("Please fill in the Site and Contact details!")
+        elif not selected_service: st.error("Please select a Service Required!")
         elif not variety: st.error("Please select a Turf Variety!")
+        elif not selected_transport: st.error("Please select Transport Details! (Select 'TBA' if unknown)")
         elif not m2_area: st.error("Please enter a Total M2 Area!")
         elif not selected_pallet: st.error("Please select a Pallet Size!")
         elif not tba_dates and (not harvest_date or not install_date): st.error("Please select both Harvest and Install dates!")
@@ -335,7 +356,7 @@ elif menu_selection == "➕ Enter New Order":
             install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
             status = "Locked" if harvest_date else "Pending"
             
-            save_new_order(selected_customer, final_site, final_contact, final_phone, special_instructions, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
+            save_new_order(selected_customer, po_number, final_site, final_contact, final_phone, special_instructions, selected_service, selected_transport, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
             st.success(f"Order saved! 🚜 Calculated: {full_pallets} Full Pallets + {loose_rolls} Loose Rolls.")
 
 elif menu_selection == "👥 Manage Customers":
@@ -361,12 +382,13 @@ elif menu_selection == "👥 Manage Customers":
 elif menu_selection == "⚙️ System Settings":
     st.title("⚙️ System Settings")
     
-    col1, col2 = st.columns(2)
+    # Created 3 columns now so everything fits beautifully!
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.subheader("🌱 Manage Turf Varieties")
+        st.subheader("🌱 Turf Varieties")
         st.dataframe(pd.DataFrame(varieties, columns=["Variety Name"]), use_container_width=True, hide_index=True)
-        new_variety = st.text_input("Enter New Variety Name:")
+        new_variety = st.text_input("Add Turf Variety:")
         if st.button("Save Variety"):
             if new_variety != "":
                 try:
@@ -377,13 +399,26 @@ elif menu_selection == "⚙️ System Settings":
                     st.error("Variety exists!")
                     
     with col2:
-        st.subheader("🪵 Manage Pallet Sizes")
+        st.subheader("🪵 Pallet Sizes")
         st.dataframe(pd.DataFrame(pallet_options, columns=["Pallet Size (M2)"]), use_container_width=True, hide_index=True)
-        new_pallet = st.number_input("Enter New Pallet Size:", min_value=1, step=1, value=50)
+        new_pallet = st.number_input("Add Pallet Size:", min_value=1, step=1, value=50)
         if st.button("Save Pallet Size"):
             try:
                 run_query("INSERT INTO pallet_sizes (size) VALUES (?)", (int(new_pallet),))
-                st.success(f"Added {new_pallet} M2 Pallet Size!")
+                st.success("Size Added!")
                 st.rerun()
             except sqlite3.IntegrityError:
-                st.error("That size already exists!")
+                st.error("Size exists!")
+                
+    with col3:
+        st.subheader("🚚 Transport Options")
+        st.dataframe(pd.DataFrame(transport_list, columns=["Fleet / Subbie Name"]), use_container_width=True, hide_index=True)
+        new_transport = st.text_input("Add Fleet # or Subcontractor:")
+        if st.button("Save Transport"):
+            if new_transport != "":
+                try:
+                    run_query("INSERT INTO transport_options (name) VALUES (?)", (new_transport.strip(),))
+                    st.success("Transport Added!")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("Transport exists!")
