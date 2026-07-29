@@ -28,8 +28,8 @@ else:
 menu_selection = st.sidebar.radio("Main Menu:", menu_options)
 st.sidebar.divider()
 
-# --- DATABASE SETUP (v12) ---
-DB_PATH = Path("turf_orders_v11.db") # Keeping v11 DB so you don't lose data!
+# --- DATABASE SETUP ---
+DB_PATH = Path("turf_orders_v11.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
@@ -172,16 +172,16 @@ if menu_selection == "📊 Pipeline Dashboard":
         if selected_row:
             selected_data = df.iloc[selected_row[0]]
             order_id = int(selected_data['id'])
+            total_m2 = int(selected_data['m2_area'])
             
-            # --- BIG CLEAR SUMMARY HEADER FOR ALL ROLES ---
-            st.subheader(f"📝 Order #{order_id} Details")
-            
-            po_display = selected_data['purchase_order'] if selected_data['purchase_order'] != "" else "None"
-            st.info(f"🏷️ **Cust PO:** {po_display} &nbsp; | &nbsp; 🪵 **Required:** {selected_data['full_pallets']} Full Pallets + {selected_data['loose_rolls']} Loose Rolls")
+            # --- CLEANED UP BANNER (No Double Fields) ---
+            st.subheader(f"📝 Edit Order #{order_id} — {selected_data['customer']}")
+            st.info(f"📐 **Total Area Ordered:** {total_m2} M2 &nbsp; | &nbsp; 🪵 **Cut Plan:** {selected_data['full_pallets']} Full Pallets + {selected_data['loose_rolls']} Loose Rolls")
             
             if selected_data['special_instructions'] != "":
-                st.warning(f"⚠️ **Special Instructions:** {selected_data['special_instructions']}")
+                st.warning(f"⚠️ **Notes:** {selected_data['special_instructions']}")
             
+            # --- ROLE BASED EDITING (Fixed Math & Layout) ---
             if user_role in ["🚚 Linehaul Drivers", "🛠️ Installers"]:
                 st.error("Read-Only Mode: Your access level only permits viewing the schedule.")
             else:
@@ -196,49 +196,54 @@ if menu_selection == "📊 Pipeline Dashboard":
                 new_status = selected_data['status']
 
                 if user_role == "👑 Ops Manager/Admin":
-                    st.write("**Admin Edit Mode** (Full Access)")
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a: new_po = st.text_input("Customer PO", value=new_po)
-                    with col_b: new_service = st.selectbox("Service", service_options, index=service_options.index(new_service) if new_service in service_options else 0)
-                    with col_c: new_transport = st.selectbox("Transport", transport_list, index=transport_list.index(new_transport) if new_transport in transport_list else 0)
-                    
-                    new_instructions = st.text_area("Update Special Instructions", value=new_instructions)
-                    col1, col2 = st.columns(2)
+                    col1, col2, col3 = st.columns(3)
                     with col1:
-                        new_harvested = st.number_input("Amount Harvested (M2)", min_value=0, value=new_harvested, step=10)
-                        new_installed = st.number_input("Amount Installed (M2)", min_value=0, value=new_installed, step=10)
+                        st.markdown("**1. Order Details**")
+                        new_po = st.text_input("Customer PO", value=new_po)
+                        new_service = st.selectbox("Service", service_options, index=service_options.index(new_service) if new_service in service_options else 0)
+                        new_transport = st.selectbox("Transport", transport_list, index=transport_list.index(new_transport) if new_transport in transport_list else 0)
                     with col2:
+                        st.markdown("**2. Progress & Math**")
+                        new_harvested = st.number_input("Total Harvested (M2)", min_value=0, value=new_harvested, step=10)
+                        new_installed = st.number_input("Total Installed (M2)", min_value=0, value=new_installed, step=10)
+                        
+                        # THE MAGIC MATH: Auto-calculates as you type above
+                        auto_remaining = total_m2 - new_installed
+                        new_remaining = st.number_input("Remaining Balance (M2)", value=auto_remaining, step=1, help="Auto-calculates, but you can override this to 0 to write-off leftovers.")
+                    with col3:
+                        st.markdown("**3. Status & Config**")
+                        status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
+                        new_status = st.selectbox("Update Status", status_options, index=status_options.index(new_status) if new_status in status_options else 0)
                         new_pallet_size = st.selectbox("Pallet Size", pallet_options, index=pallet_options.index(new_pallet_size) if new_pallet_size in pallet_options else 0)
-                        new_remaining = st.number_input("Remaining Balance (M2) [Admin Override]", value=new_remaining, step=1)
-                    
-                    status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
-                    new_status = st.selectbox("Update Status", status_options, index=status_options.index(new_status) if new_status in status_options else 0)
+                        new_instructions = st.text_area("Update Notes", value=new_instructions)
                 
                 elif user_role == "🚜 Farm Staff":
                     st.write("**Farm Staff Edit Mode** (Harvesting & Logistics)")
                     col1, col2 = st.columns(2)
                     with col1:
-                        new_harvested = st.number_input("Update Harvest Qty (M2)", min_value=0, value=new_harvested, step=10)
+                        new_harvested = st.number_input("Total Harvested (M2)", min_value=0, value=new_harvested, step=10)
                         new_transport = st.selectbox("Update Transport", transport_list, index=transport_list.index(new_transport) if new_transport in transport_list else 0)
                     with col2:
                         new_pallet_size = st.selectbox("Update Pallet Size", pallet_options, index=pallet_options.index(new_pallet_size) if new_pallet_size in pallet_options else 0)
-                    
-                    status_options = ["Pending", "Locked", "Harvested"]
-                    if new_status not in status_options: status_options.append(new_status)
-                    new_status = st.selectbox("Update Status", status_options, index=status_options.index(new_status))
+                        status_options = ["Pending", "Locked", "Harvested"]
+                        if new_status not in status_options: status_options.append(new_status)
+                        new_status = st.selectbox("Update Status", status_options, index=status_options.index(new_status))
                 
                 elif user_role == "👷 Site Supervisors":
                     st.write("**Site Supervisor Edit Mode** (Installations)")
-                    new_installed = st.number_input("Update Qty Installed (M2)", min_value=0, value=new_installed, step=10)
-                    new_remaining = int(selected_data['m2_area']) - new_installed
+                    new_installed = st.number_input("Total Qty Installed (M2)", min_value=0, value=new_installed, step=10)
+                    
+                    # Auto math for supervisors (they can't manually override)
+                    new_remaining = total_m2 - new_installed
+                    st.info(f"Calculated Remaining Balance: **{new_remaining} M2**")
                     
                     status_options = ["Locked", "Harvested", "Installed"]
                     if new_status not in status_options: status_options.append(new_status)
                     new_status = st.selectbox("Update Status", status_options, index=status_options.index(new_status))
 
                 if st.button("Save Order Updates"):
-                    full_pallets = int(selected_data['m2_area'] // new_pallet_size)
-                    loose_rolls = int(selected_data['m2_area'] % new_pallet_size)
+                    full_pallets = int(total_m2 // new_pallet_size)
+                    loose_rolls = int(total_m2 % new_pallet_size)
                     
                     run_query("""
                         UPDATE orders SET 
