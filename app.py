@@ -15,14 +15,14 @@ menu_selection = st.sidebar.radio("Main Menu:", [
 ])
 st.sidebar.divider()
 
-# --- DATABASE SETUP (Upgraded to v6 for Turf Varieties) ---
-DB_PATH = Path("turf_orders_v6.db")
+# --- DATABASE SETUP (Upgraded to v7 for Pallet Math) ---
+DB_PATH = Path("turf_orders_v7.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # 1. Create Orders Table
+    # 1. Create Orders Table (Now with pallet fields)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,6 +32,9 @@ def init_database():
             contact_phone TEXT DEFAULT '',
             variety TEXT NOT NULL,
             m2_area INTEGER NOT NULL,
+            pallet_size INTEGER DEFAULT 60,
+            full_pallets INTEGER DEFAULT 0,
+            loose_rolls INTEGER DEFAULT 0,
             harvest_date TEXT DEFAULT '',
             install_date TEXT DEFAULT '',
             status TEXT NOT NULL DEFAULT 'Pending',
@@ -50,7 +53,7 @@ def init_database():
     # 4. Create Contacts Table
     cursor.execute("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
 
-    # 5. Create Varieties Table (NEW!)
+    # 5. Create Varieties Table
     cursor.execute("CREATE TABLE IF NOT EXISTS varieties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     
     # Seed initial data to prevent empty errors
@@ -91,7 +94,7 @@ def get_contacts_for_site(site_address):
 def get_varieties():
     return [row[0] for row in run_query("SELECT name FROM varieties ORDER BY name ASC")]
 
-def save_new_order(customer, site, contact, phone, variety, m2_area, harvest, install, status):
+def save_new_order(customer, site, contact, phone, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status):
     existing_sites = get_sites_for_customer(customer)
     if site not in existing_sites and site.strip() != "":
         run_query("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", (customer, site))
@@ -102,17 +105,17 @@ def save_new_order(customer, site, contact, phone, variety, m2_area, harvest, in
             run_query("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", (site, contact, phone))
             
     query = """
-        INSERT INTO orders (customer, site_address, site_contact, contact_phone, variety, m2_area, harvest_date, install_date, status, amount_installed, remaining_balance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        INSERT INTO orders (customer, site_address, site_contact, contact_phone, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest_date, install_date, status, amount_installed, remaining_balance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     """
-    run_query(query, (customer, site, contact, phone, variety, m2_area, harvest, install, status, m2_area))
+    run_query(query, (customer, site, contact, phone, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status, m2_area))
 
 # Initialize database on app start
 init_database()
 
 # --- DYNAMIC LISTS ---
 pallet_options = [60, 70, 80]
-varieties = get_varieties() # Now pulled live from the database!
+varieties = get_varieties()
 
 # --- ROUTING LOGIC BASED ON MENU ---
 
@@ -138,8 +141,9 @@ if menu_selection == "📊 Pipeline Dashboard":
             styled_df, 
             use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
             column_config={
-                "id": "ID", "customer": "Customer", "site_address": "Site", "site_contact": "Contact", 
-                "contact_phone": "Phone", "variety": "Variety", "m2_area": "Total M2",
+                "id": "ID", "customer": "Customer", "site_address": "Site", "site_contact": None, 
+                "contact_phone": None, "variety": "Variety", "m2_area": "Total M2",
+                "pallet_size": None, "full_pallets": "Pallets", "loose_rolls": "Loose Rolls",
                 "harvest_date": "Harvest", "install_date": "Install", "status": "Status",
                 "amount_installed": "Installed M2", "remaining_balance": "Remaining M2", "created_at": None
             }
@@ -207,11 +211,12 @@ elif menu_selection == "➕ Enter New Order":
         final_phone = ""
         
     st.divider()
-    st.subheader("Turf Details")
+    st.subheader("Turf Details & Logistics")
     col1, col2 = st.columns(2)
     with col1:
         variety = st.selectbox("Turf Variety", varieties)
         m2_area = st.number_input("Total M2 Area Required", min_value=0, step=10, value=0)
+        selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options)
     with col2:
         tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=True)
         if not tba_dates:
@@ -221,16 +226,22 @@ elif menu_selection == "➕ Enter New Order":
             harvest_date = None
             install_date = None
 
-    if st.button("Save New Order & Client Details to Database"):
+    if st.button("Save New Order & Calculate Pallets"):
         if final_site.strip() == "" or final_contact.strip() == "":
             st.error("Please fill in the Site and Contact details!")
+        elif m2_area == 0:
+            st.error("Please enter a Total M2 Area greater than 0!")
         else:
+            # The Magic Pallet Math!
+            full_pallets = int(m2_area // selected_pallet)
+            loose_rolls = int(m2_area % selected_pallet)
+            
             harvest_str = harvest_date.strftime("%Y-%m-%d") if harvest_date else ""
             install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
             status = "Locked" if harvest_date else "Pending"
             
-            save_new_order(selected_customer, final_site, final_contact, final_phone, variety, m2_area, harvest_str, install_str, status)
-            st.success("Order saved! Site and Contact remembered for next time.")
+            save_new_order(selected_customer, final_site, final_contact, final_phone, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
+            st.success(f"Order saved! 🚜 Calculated: {full_pallets} Full Pallets + {loose_rolls} Loose Rolls.")
 
 elif menu_selection == "👥 Manage Customers":
     st.title("👥 Manage Customers")
