@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import datetime
 from pathlib import Path
 
 st.set_page_config(page_title="Turf Galore Sched", layout="wide")
@@ -9,20 +10,21 @@ st.set_page_config(page_title="Turf Galore Sched", layout="wide")
 st.sidebar.title("Navigation")
 menu_selection = st.sidebar.radio("Main Menu:", [
     "📊 Pipeline Dashboard", 
+    "📋 Daily Run Sheet",
     "➕ Enter New Order", 
     "👥 Manage Customers", 
     "⚙️ System Settings"
 ])
 st.sidebar.divider()
 
-# --- DATABASE SETUP (Upgraded to v7 for Pallet Math) ---
-DB_PATH = Path("turf_orders_v7.db")
+# --- DATABASE SETUP (Upgraded to v8 for all 3 new features!) ---
+DB_PATH = Path("turf_orders_v8.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # 1. Create Orders Table (Now with pallet fields)
+    # 1. Orders Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,29 +46,28 @@ def init_database():
         )
     """)
     
-    # 2. Create Customers Table
+    # Other Tables
     cursor.execute("CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
-    
-    # 3. Create Sites Table
     cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_name TEXT NOT NULL, site_address TEXT NOT NULL)")
-    
-    # 4. Create Contacts Table
     cursor.execute("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
-
-    # 5. Create Varieties Table
     cursor.execute("CREATE TABLE IF NOT EXISTS varieties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS pallet_sizes (id INTEGER PRIMARY KEY AUTOINCREMENT, size INTEGER UNIQUE NOT NULL)")
     
-    # Seed initial data to prevent empty errors
+    # Seed Data (Customers, Sites, Contacts, Varieties)
     cursor.execute("SELECT COUNT(*) FROM customers")
     if cursor.fetchone()[0] == 0:
         cursor.executemany("INSERT INTO customers (name) VALUES (?)", [("EXCELL GRAY",), ("FLEMINGS",), ("NEDGE",), ("GREEN CONCEPTS",)])
         cursor.execute("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", ("EXCELL GRAY", "123 Spring St, Melbourne"))
         cursor.execute("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", ("123 Spring St, Melbourne", "Dave Foreman", "0412 345 678"))
 
-    # Seed initial varieties
     cursor.execute("SELECT COUNT(*) FROM varieties")
     if cursor.fetchone()[0] == 0:
         cursor.executemany("INSERT INTO varieties (name) VALUES (?)", [("Kikuyu",), ("Santa Anna Couch",), ("Buffalo",)])
+
+    # Seed Pallet Sizes
+    cursor.execute("SELECT COUNT(*) FROM pallet_sizes")
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany("INSERT INTO pallet_sizes (size) VALUES (?)", [(60,), (70,), (80,)])
 
     conn.commit()
     conn.close()
@@ -81,18 +82,13 @@ def run_query(query, params=()):
     conn.close()
     return result
 
-def get_customers():
-    return [row[0] for row in run_query("SELECT name FROM customers ORDER BY name ASC")]
-
-def get_sites_for_customer(customer_name):
-    return [row[0] for row in run_query("SELECT site_address FROM sites WHERE customer_name = ?", (customer_name,))]
-
+def get_customers(): return [row[0] for row in run_query("SELECT name FROM customers ORDER BY name ASC")]
+def get_sites_for_customer(customer_name): return [row[0] for row in run_query("SELECT site_address FROM sites WHERE customer_name = ?", (customer_name,))]
 def get_contacts_for_site(site_address):
     rows = run_query("SELECT contact_name, phone FROM contacts WHERE site_address = ?", (site_address,))
     return [{"name": r[0], "phone": r[1]} for r in rows]
-
-def get_varieties():
-    return [row[0] for row in run_query("SELECT name FROM varieties ORDER BY name ASC")]
+def get_varieties(): return [row[0] for row in run_query("SELECT name FROM varieties ORDER BY name ASC")]
+def get_pallet_sizes(): return [row[0] for row in run_query("SELECT size FROM pallet_sizes ORDER BY size ASC")]
 
 def save_new_order(customer, site, contact, phone, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status):
     existing_sites = get_sites_for_customer(customer)
@@ -114,24 +110,33 @@ def save_new_order(customer, site, contact, phone, variety, m2_area, pallet_size
 init_database()
 
 # --- DYNAMIC LISTS ---
-pallet_options = [60, 70, 80]
+pallet_options = get_pallet_sizes()
 varieties = get_varieties()
 
 # --- ROUTING LOGIC BASED ON MENU ---
 
 if menu_selection == "📊 Pipeline Dashboard":
     st.title("🚜 Turf Galore Sched — Ops Dashboard")
-    st.subheader("Master Juggling Pipeline")
+    
+    # 1. THE NEW FILTER!
+    col_filter, _ = st.columns([1, 3])
+    with col_filter:
+        view_mode = st.selectbox("View Filter:", ["Active Pipeline (Pending/Locked/Harvested)", "Completed & Cancelled", "Show All Orders"])
     
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
+    if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
+        df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY created_at DESC", conn)
+    elif view_mode == "Completed & Cancelled":
+        df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Installed', 'Cancelled') ORDER BY created_at DESC", conn)
+    else:
+        df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
     conn.close()
     
     if df.empty:
-        st.info("No orders in the system.")
+        st.info("No orders found for this view.")
     else:
         def row_color(row):
-            if row['status'] == 'Installed': return ['background-color: #e2e3e5; color: #6c757d'] * len(row)
+            if row['status'] in ['Installed', 'Cancelled']: return ['background-color: #e2e3e5; color: #6c757d'] * len(row)
             elif row['harvest_date'] != "" and row['install_date'] != "": return ['background-color: #d4edda; color: black'] * len(row)
             return ['background-color: #fff3cd; color: black'] * len(row)
             
@@ -177,6 +182,40 @@ if menu_selection == "📊 Pipeline Dashboard":
                 """, (new_address, new_contact, new_phone, new_installed, new_remaining, new_status, order_id))
                 st.success("Order updated!")
                 st.rerun()
+
+elif menu_selection == "📋 Daily Run Sheet":
+    # 2. THE NEW DAILY RUN SHEET!
+    st.title("📋 Daily Run Sheet")
+    
+    col_date, _ = st.columns([1, 3])
+    with col_date:
+        target_date = st.date_input("Select Date for Run Sheet", datetime.date.today())
+    target_date_str = target_date.strftime("%Y-%m-%d")
+    
+    conn = sqlite3.connect(DB_PATH)
+    harvests = pd.read_sql_query("SELECT customer, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, status FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
+    installs = pd.read_sql_query("SELECT customer, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, status FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
+    conn.close()
+    
+    clean_columns = {
+        "customer": "Customer", "site_address": "Site Address", "site_contact": "Contact", 
+        "contact_phone": "Phone", "variety": "Variety", "m2_area": "M2", 
+        "full_pallets": "Pallets", "loose_rolls": "Loose Rolls", "status": "Status"
+    }
+
+    st.subheader(f"🚜 Harvests for {target_date.strftime('%d %b %Y')}")
+    if harvests.empty:
+        st.info("No harvests scheduled for this date.")
+    else:
+        st.dataframe(harvests, use_container_width=True, hide_index=True, column_config=clean_columns)
+        
+    st.divider()
+    
+    st.subheader(f"🌱 Installs for {target_date.strftime('%d %b %Y')}")
+    if installs.empty:
+        st.info("No installs scheduled for this date.")
+    else:
+        st.dataframe(installs, use_container_width=True, hide_index=True, column_config=clean_columns)
 
 elif menu_selection == "➕ Enter New Order":
     st.title("➕ Queue New Order")
@@ -232,7 +271,6 @@ elif menu_selection == "➕ Enter New Order":
         elif m2_area == 0:
             st.error("Please enter a Total M2 Area greater than 0!")
         else:
-            # The Magic Pallet Math!
             full_pallets = int(m2_area // selected_pallet)
             loose_rolls = int(m2_area % selected_pallet)
             
@@ -267,23 +305,31 @@ elif menu_selection == "👥 Manage Customers":
 elif menu_selection == "⚙️ System Settings":
     st.title("⚙️ System Settings")
     
-    st.subheader("🌱 Manage Turf Varieties")
     col1, col2 = st.columns(2)
     
+    # Turf Varieties section
     with col1:
-        st.write("Current Varieties:")
+        st.subheader("🌱 Manage Turf Varieties")
         st.dataframe(pd.DataFrame(varieties, columns=["Variety Name"]), use_container_width=True, hide_index=True)
-        
-    with col2:
-        st.write("➕ Add New Turf Variety")
         new_variety = st.text_input("Enter New Variety Name:")
         if st.button("Save Variety"):
-            if new_variety == "":
-                st.error("Please enter a variety name first.")
-            else:
+            if new_variety != "":
                 try:
                     run_query("INSERT INTO varieties (name) VALUES (?)", (new_variety.strip(),))
-                    st.success(f"Added {new_variety} to the system!")
+                    st.success("Variety Added!")
                     st.rerun()
                 except sqlite3.IntegrityError:
-                    st.error("That variety already exists in the system!")
+                    st.error("Variety exists!")
+                    
+    # 3. THE NEW PALLET SIZES SETTING!
+    with col2:
+        st.subheader("🪵 Manage Pallet Sizes")
+        st.dataframe(pd.DataFrame(pallet_options, columns=["Pallet Size (M2)"]), use_container_width=True, hide_index=True)
+        new_pallet = st.number_input("Enter New Pallet Size:", min_value=1, step=1, value=50)
+        if st.button("Save Pallet Size"):
+            try:
+                run_query("INSERT INTO pallet_sizes (size) VALUES (?)", (int(new_pallet),))
+                st.success(f"Added {new_pallet} M2 Pallet Size!")
+                st.rerun()
+            except sqlite3.IntegrityError:
+                st.error("That size already exists!")
