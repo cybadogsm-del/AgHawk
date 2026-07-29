@@ -231,8 +231,7 @@ if menu_selection == "📊 Pipeline Dashboard":
             with st.container(border=True):
                 po_display = selected_data['purchase_order'] if selected_data['purchase_order'] != "" else "N/A"
                 
-                # --- NEW FUNCTIONALITY: The Clickable Dialer Link ---
-                # We strip out spaces just in case the dialer gets confused, then wrap it in a hyperlink.
+                # --- Clickable Dialer Link ---
                 raw_phone = selected_data['contact_phone']
                 if raw_phone and raw_phone.strip() != "":
                     clean_phone = raw_phone.replace(" ", "")
@@ -242,7 +241,7 @@ if menu_selection == "📊 Pipeline Dashboard":
                 
                 s_col1, s_col2, s_col3 = st.columns(3)
                 with s_col1:
-                    st.markdown(f"**📍 Site Info**\n- **Address:** {selected_data['site_address']}\n- **Contact:** {selected_data['site_contact']}\n- **Phone:** {phone_link}")
+                    st.markdown(f"**📍 Site Info**\n- **Address:** {selected_data['site_address']}\n- **Contact:** {selected_data['site_contact'] if selected_data['site_contact'] else 'N/A'}\n- **Phone:** {phone_link}")
                 with s_col2:
                     st.markdown(f"**📋 Logistics**\n- **Cust PO:** {po_display}\n- **Service:** {selected_data['service_type']}\n- **Transport:** {selected_data['transport_detail']}")
                 with s_col3:
@@ -410,7 +409,7 @@ elif menu_selection == "➕ Enter New Order":
                 
             if contact_mode == "📂 Select Existing Contact":
                 contact_names = [c["name"] for c in existing_contacts]
-                selected_contact = st.selectbox("Choose Contact:", contact_names, index=None, placeholder="Select a saved contact...")
+                selected_contact = st.selectbox("Choose Contact (Optional):", contact_names, index=None, placeholder="Select a saved contact...")
                 if selected_contact:
                     final_contact = selected_contact
                     matching_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "")
@@ -421,9 +420,9 @@ elif menu_selection == "➕ Enter New Order":
             else:
                 col_c1, col_c2 = st.columns(2)
                 with col_c1:
-                    final_contact = st.text_input("Type New Contact Name:")
+                    final_contact = st.text_input("Type New Contact Name (Optional):")
                 with col_c2:
-                    final_phone = st.text_input("Type New Contact Phone:")
+                    final_phone = st.text_input("Type New Contact Phone (Optional):")
         else:
             final_contact = ""
             final_phone = ""
@@ -455,7 +454,7 @@ elif menu_selection == "➕ Enter New Order":
 
     if st.button("Save New Order & Calculate Pallets"):
         if not selected_customer: st.error("Please select a Customer!")
-        elif final_site.strip() == "" or final_contact.strip() == "": st.error("Please fill in the Site and Contact details!")
+        elif final_site.strip() == "": st.error("Please enter a Job Site address!")
         elif not selected_service: st.error("Please select a Service Required!")
         elif not variety: st.error("Please select a Turf Variety!")
         elif not selected_transport: st.error("Please select Transport Details! (Select 'TBA' if unknown)")
@@ -470,7 +469,10 @@ elif menu_selection == "➕ Enter New Order":
             install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
             status = "Locked" if harvest_date else "Pending"
             
-            save_new_order(selected_customer, po_number, final_site, final_contact, final_phone, special_instructions, selected_service, selected_transport, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
+            clean_contact = final_contact if final_contact else ""
+            clean_phone = final_phone if final_phone else ""
+            
+            save_new_order(selected_customer, po_number, final_site, clean_contact, clean_phone, special_instructions, selected_service, selected_transport, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
             st.success(f"Order saved! 🚜 Calculated: {full_pallets} Full Pallets + {loose_rolls} Loose Rolls.")
 
 elif menu_selection == "👥 Manage Customers":
