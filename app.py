@@ -28,8 +28,8 @@ else:
 menu_selection = st.sidebar.radio("Main Menu:", menu_options)
 st.sidebar.divider()
 
-# --- DATABASE SETUP (v11) ---
-DB_PATH = Path("turf_orders_v11.db")
+# --- DATABASE SETUP (v12) ---
+DB_PATH = Path("turf_orders_v11.db") # Keeping v11 DB so you don't lose data!
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
@@ -156,11 +156,11 @@ if menu_selection == "📊 Pipeline Dashboard":
             styled_df, 
             use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
             column_config={
-                "id": "ID", "customer": "Customer", "purchase_order": "PO #", "site_address": "Site", 
+                "id": "ID", "customer": "Customer", "purchase_order": "Cust PO", "site_address": "Site", 
                 "site_contact": None, "contact_phone": None, "special_instructions": None, 
                 "service_type": "Service", "transport_detail": "Transport",
                 "variety": "Variety", "m2_area": "Total M2",
-                "pallet_size": None, "full_pallets": "Pallets", "loose_rolls": "Loose",
+                "pallet_size": None, "full_pallets": "Full Pallets", "loose_rolls": "Loose Rolls",
                 "harvest_date": "Harvest", "install_date": "Install", "status": "Status",
                 "amount_harvested": "Harv. M2", "amount_installed": "Inst. M2", 
                 "remaining_balance": "Rem. M2", "created_at": None
@@ -172,13 +172,18 @@ if menu_selection == "📊 Pipeline Dashboard":
         if selected_row:
             selected_data = df.iloc[selected_row[0]]
             order_id = int(selected_data['id'])
+            
+            # --- BIG CLEAR SUMMARY HEADER FOR ALL ROLES ---
             st.subheader(f"📝 Order #{order_id} Details")
             
+            po_display = selected_data['purchase_order'] if selected_data['purchase_order'] != "" else "None"
+            st.info(f"🏷️ **Cust PO:** {po_display} &nbsp; | &nbsp; 🪵 **Required:** {selected_data['full_pallets']} Full Pallets + {selected_data['loose_rolls']} Loose Rolls")
+            
             if selected_data['special_instructions'] != "":
-                st.info(f"**Special Instructions:** {selected_data['special_instructions']}")
+                st.warning(f"⚠️ **Special Instructions:** {selected_data['special_instructions']}")
             
             if user_role in ["🚚 Linehaul Drivers", "🛠️ Installers"]:
-                st.warning("Read-Only Mode: Your access level only permits viewing the schedule.")
+                st.error("Read-Only Mode: Your access level only permits viewing the schedule.")
             else:
                 new_instructions = selected_data['special_instructions']
                 new_po = selected_data['purchase_order']
@@ -193,7 +198,7 @@ if menu_selection == "📊 Pipeline Dashboard":
                 if user_role == "👑 Ops Manager/Admin":
                     st.write("**Admin Edit Mode** (Full Access)")
                     col_a, col_b, col_c = st.columns(3)
-                    with col_a: new_po = st.text_input("PO #", value=new_po)
+                    with col_a: new_po = st.text_input("Customer PO", value=new_po)
                     with col_b: new_service = st.selectbox("Service", service_options, index=service_options.index(new_service) if new_service in service_options else 0)
                     with col_c: new_transport = st.selectbox("Transport", transport_list, index=transport_list.index(new_transport) if new_transport in transport_list else 0)
                     
@@ -257,10 +262,10 @@ elif menu_selection == "📋 Daily Run Sheet":
     conn.close()
     
     clean_columns = {
-        "customer": "Customer", "purchase_order": "PO#", "service_type": "Service", "transport_detail": "Transport",
+        "customer": "Customer", "purchase_order": "Cust PO", "service_type": "Service", "transport_detail": "Transport",
         "site_address": "Site", "site_contact": "Contact", "contact_phone": "Phone", 
-        "variety": "Variety", "m2_area": "M2", "full_pallets": "Pallets", 
-        "loose_rolls": "Loose", "special_instructions": "Notes", "status": "Status"
+        "variety": "Variety", "m2_area": "M2", "full_pallets": "Full Pallets", 
+        "loose_rolls": "Loose Rolls", "special_instructions": "Notes", "status": "Status"
     }
 
     st.subheader(f"🚜 Harvests for {target_date.strftime('%d %b %Y')}")
@@ -288,7 +293,6 @@ elif menu_selection == "➕ Enter New Order":
         st.subheader("📍 Job Site Details")
         existing_sites = get_sites_for_customer(selected_customer)
         
-        # SMART UI: Automatically ask for a new site if they have none saved
         if not existing_sites:
             st.info(f"No previous sites found for {selected_customer}. Enter their first site below.")
             site_mode = "➕ Enter New Site"
@@ -305,7 +309,6 @@ elif menu_selection == "➕ Enter New Order":
             st.subheader("👤 Site Contact")
             existing_contacts = get_contacts_for_site(final_site)
             
-            # SMART UI: Automatically ask for a new contact if the site has none
             if not existing_contacts:
                 st.info("No contacts saved for this site. Enter a new one below.")
                 contact_mode = "➕ Enter New Contact"
