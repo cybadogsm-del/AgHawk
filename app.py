@@ -440,12 +440,14 @@ elif menu_selection == "➕ Enter New Order":
         m2_area = st.number_input("Total M2 Area Required", min_value=10, step=10, value=None, placeholder="Enter total area...")
         
     with col2:
-        selected_transport = st.selectbox("Transport / Fleet", transport_list, index=None, placeholder="Select Transport Details...")
+        selected_transport = st.selectbox("Transport / Fleet (Optional)", transport_list, index=None, placeholder="Leave blank if unknown...")
         selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options, index=None, placeholder="Select Pallet Size...")
-        tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=True)
+        tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=False)
         if not tba_dates:
-            harvest_date = st.date_input("Confirmed Harvest Date", value=None)
             install_date = st.date_input("Confirmed Install Date", value=None)
+            
+            default_harvest = (install_date - datetime.timedelta(days=1)) if install_date else None
+            harvest_date = st.date_input("Confirmed Harvest Date", value=default_harvest)
         else:
             harvest_date = None
             install_date = None
@@ -457,7 +459,6 @@ elif menu_selection == "➕ Enter New Order":
         elif final_site.strip() == "": st.error("Please enter a Job Site address!")
         elif not selected_service: st.error("Please select a Service Required!")
         elif not variety: st.error("Please select a Turf Variety!")
-        elif not selected_transport: st.error("Please select Transport Details! (Select 'TBA' if unknown)")
         elif not m2_area: st.error("Please enter a Total M2 Area!")
         elif not selected_pallet: st.error("Please select a Pallet Size!")
         elif not tba_dates and (not harvest_date or not install_date): st.error("Please select both Harvest and Install dates!")
@@ -471,8 +472,9 @@ elif menu_selection == "➕ Enter New Order":
             
             clean_contact = final_contact if final_contact else ""
             clean_phone = final_phone if final_phone else ""
+            clean_transport = selected_transport if selected_transport else "TBA"
             
-            save_new_order(selected_customer, po_number, final_site, clean_contact, clean_phone, special_instructions, selected_service, selected_transport, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
+            save_new_order(selected_customer, po_number, final_site, clean_contact, clean_phone, special_instructions, selected_service, clean_transport, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
             st.success(f"Order saved! 🚜 Calculated: {full_pallets} Full Pallets + {loose_rolls} Loose Rolls.")
 
 elif menu_selection == "👥 Manage Customers":
