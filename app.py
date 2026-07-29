@@ -152,18 +152,32 @@ if menu_selection == "📊 Pipeline Dashboard":
             
         styled_df = df.style.apply(row_color, axis=1)
         
+        # MASSIVE CLEANUP: Only showing the absolute essentials so it fits the screen
         selection_event = st.dataframe(
             styled_df, 
             use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
             column_config={
-                "id": "ID", "customer": "Customer", "purchase_order": "Cust PO", "site_address": "Site", 
-                "site_contact": None, "contact_phone": None, "special_instructions": None, 
-                "service_type": "Service", "transport_detail": "Transport",
-                "variety": "Variety", "m2_area": "Total M2",
-                "pallet_size": None, "full_pallets": "Full Pallets", "loose_rolls": "Loose Rolls",
-                "harvest_date": "Harvest", "install_date": "Install", "status": "Status",
-                "amount_harvested": "Harv. M2", "amount_installed": "Inst. M2", 
-                "remaining_balance": "Rem. M2", "created_at": None
+                "id": "ID", 
+                "customer": "Customer", 
+                "purchase_order": None, 
+                "site_address": "Site", 
+                "site_contact": None, 
+                "contact_phone": None, 
+                "special_instructions": None, 
+                "service_type": None, 
+                "transport_detail": None,
+                "variety": "Variety", 
+                "m2_area": "M2",
+                "pallet_size": None, 
+                "full_pallets": None, 
+                "loose_rolls": None,
+                "harvest_date": "Harvest", 
+                "install_date": "Install", 
+                "status": "Status",
+                "amount_harvested": None, 
+                "amount_installed": None, 
+                "remaining_balance": None, 
+                "created_at": None
             }
         )
         st.divider()
@@ -174,14 +188,26 @@ if menu_selection == "📊 Pipeline Dashboard":
             order_id = int(selected_data['id'])
             total_m2 = int(selected_data['m2_area'])
             
-            # --- CLEANED UP BANNER (No Double Fields) ---
-            st.subheader(f"📝 Edit Order #{order_id} — {selected_data['customer']}")
-            st.info(f"📐 **Total Area Ordered:** {total_m2} M2 &nbsp; | &nbsp; 🪵 **Cut Plan:** {selected_data['full_pallets']} Full Pallets + {selected_data['loose_rolls']} Loose Rolls")
+            st.subheader(f"🔍 Order #{order_id} Drill-Down: {selected_data['customer']}")
             
+            # --- THE FULL ORDER SNAPSHOT ---
+            po_display = selected_data['purchase_order'] if selected_data['purchase_order'] != "" else "N/A"
+            
+            # Use nice columns to display all the hidden data clearly
+            s_col1, s_col2, s_col3 = st.columns(3)
+            with s_col1:
+                st.markdown(f"**📍 Site Info**\n- **Address:** {selected_data['site_address']}\n- **Contact:** {selected_data['site_contact']}\n- **Phone:** {selected_data['contact_phone']}")
+            with s_col2:
+                st.markdown(f"**📋 Logistics**\n- **Cust PO:** {po_display}\n- **Service:** {selected_data['service_type']}\n- **Transport:** {selected_data['transport_detail']}")
+            with s_col3:
+                st.markdown(f"**📐 Turf Required**\n- **Total:** {total_m2} M2 ({selected_data['variety']})\n- **Pallet Size:** {selected_data['pallet_size']} M2\n- **To Cut:** {selected_data['full_pallets']} Full Pallets + {selected_data['loose_rolls']} Loose Rolls")
+
             if selected_data['special_instructions'] != "":
                 st.warning(f"⚠️ **Notes:** {selected_data['special_instructions']}")
             
-            # --- ROLE BASED EDITING (Fixed Math & Layout) ---
+            st.write("---")
+            
+            # --- ROLE BASED EDITING ---
             if user_role in ["🚚 Linehaul Drivers", "🛠️ Installers"]:
                 st.error("Read-Only Mode: Your access level only permits viewing the schedule.")
             else:
@@ -192,7 +218,6 @@ if menu_selection == "📊 Pipeline Dashboard":
                 new_pallet_size = int(selected_data['pallet_size'])
                 new_harvested = int(selected_data['amount_harvested'])
                 new_installed = int(selected_data['amount_installed'])
-                new_remaining = int(selected_data['remaining_balance'])
                 new_status = selected_data['status']
 
                 if user_role == "👑 Ops Manager/Admin":
@@ -206,8 +231,6 @@ if menu_selection == "📊 Pipeline Dashboard":
                         st.markdown("**2. Progress & Math**")
                         new_harvested = st.number_input("Total Harvested (M2)", min_value=0, value=new_harvested, step=10)
                         new_installed = st.number_input("Total Installed (M2)", min_value=0, value=new_installed, step=10)
-                        
-                        # THE MAGIC MATH: Auto-calculates as you type above
                         auto_remaining = total_m2 - new_installed
                         new_remaining = st.number_input("Remaining Balance (M2)", value=auto_remaining, step=1, help="Auto-calculates, but you can override this to 0 to write-off leftovers.")
                     with col3:
@@ -228,12 +251,11 @@ if menu_selection == "📊 Pipeline Dashboard":
                         status_options = ["Pending", "Locked", "Harvested"]
                         if new_status not in status_options: status_options.append(new_status)
                         new_status = st.selectbox("Update Status", status_options, index=status_options.index(new_status))
+                        new_remaining = int(selected_data['remaining_balance'])
                 
                 elif user_role == "👷 Site Supervisors":
                     st.write("**Site Supervisor Edit Mode** (Installations)")
                     new_installed = st.number_input("Total Qty Installed (M2)", min_value=0, value=new_installed, step=10)
-                    
-                    # Auto math for supervisors (they can't manually override)
                     new_remaining = total_m2 - new_installed
                     st.info(f"Calculated Remaining Balance: **{new_remaining} M2**")
                     
@@ -266,11 +288,12 @@ elif menu_selection == "📋 Daily Run Sheet":
     installs = pd.read_sql_query("SELECT customer, purchase_order, service_type, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     conn.close()
     
+    # Cleaned up Run Sheet table so it also fits well on screen!
     clean_columns = {
-        "customer": "Customer", "purchase_order": "Cust PO", "service_type": "Service", "transport_detail": "Transport",
-        "site_address": "Site", "site_contact": "Contact", "contact_phone": "Phone", 
-        "variety": "Variety", "m2_area": "M2", "full_pallets": "Full Pallets", 
-        "loose_rolls": "Loose Rolls", "special_instructions": "Notes", "status": "Status"
+        "customer": "Customer", "purchase_order": None, "service_type": None, "transport_detail": "Transport",
+        "site_address": "Site", "site_contact": "Contact", "contact_phone": None, 
+        "variety": "Variety", "m2_area": "M2", "full_pallets": "Pallets", 
+        "loose_rolls": "Loose", "special_instructions": "Notes", "status": "Status"
     }
 
     st.subheader(f"🚜 Harvests for {target_date.strftime('%d %b %Y')}")
