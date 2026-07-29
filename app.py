@@ -169,21 +169,29 @@ if menu_selection == "📊 Pipeline Dashboard":
             
             st.markdown("💡 **Click any row to drill down into the order details.**")
             
+            # --- THE FIX: We hide 'ID' and shorten the headers to save maximum horizontal space ---
             selection_event = st.dataframe(
                 styled_df, 
                 use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
                 column_config={
-                    "id": "ID", "customer": "Customer", "purchase_order": None, "site_address": "Site", 
-                    "site_contact": None, "contact_phone": None, "special_instructions": None, 
-                    "service_type": None, "transport_detail": None, "variety": "Variety", 
-                    "m2_area": "Ord M2",
+                    "id": None, # Hiding this claw backs a bunch of pixels!
+                    "customer": "Customer", 
+                    "purchase_order": None, 
+                    "site_address": "Site", 
+                    "site_contact": None, 
+                    "contact_phone": None, 
+                    "special_instructions": None, 
+                    "service_type": None, 
+                    "transport_detail": None, 
+                    "variety": "Turf", # Shortened
+                    "m2_area": "Ord",  # Shortened
                     "pallet_size": None, "full_pallets": None, "loose_rolls": None,
-                    "harvest_date": "Harvest", "install_date": "Install", "status": "Status",
-                    
-                    # Brought these discrete columns back for easy scanning!
-                    "amount_harvested": "Harv M2", 
-                    "amount_installed": "Inst M2", 
-                    "remaining_balance": "Bal M2", 
+                    "harvest_date": "H-Date", # Shortened 
+                    "install_date": "I-Date", # Shortened
+                    "status": "Status",
+                    "amount_harvested": "Harv", # Shortened 
+                    "amount_installed": "Inst", # Shortened
+                    "remaining_balance": "Bal", # Shortened
                     "created_at": None
                 }
             )
@@ -251,8 +259,6 @@ if menu_selection == "📊 Pipeline Dashboard":
                 if user_role in ["🚚 Linehaul Drivers", "🛠️ Installers"]:
                     st.error("Read-Only Mode: Your access level only permits viewing the schedule.")
                 else:
-                    # Form starts here. Notice every single box now has a unique "key="
-                    # This completely stops the browser from dropping the numbers.
                     with st.form(key=f"edit_form_{order_id}"):
                         if user_role == "👑 Ops Manager/Admin":
                             col1, col2, col3 = st.columns(3)
@@ -294,11 +300,8 @@ if menu_selection == "📊 Pipeline Dashboard":
                             if selected_data['status'] not in status_options: status_options.append(selected_data['status'])
                             st.selectbox("Update Status", status_options, index=status_options.index(selected_data['status']), key=f"stat_{order_id}")
 
-                        # --- BULLETPROOF SAVE LOGIC ---
-                        # We reach directly into the browser's raw memory (session_state) to grab the numbers
                         if st.form_submit_button("💾 Save Order Updates"):
                             
-                            # Safely fetch whatever exists in memory for this role, default to old DB values if hidden
                             final_harv = st.session_state.get(f"harv_{order_id}", harv_val)
                             final_inst = st.session_state.get(f"inst_{order_id}", inst_val)
                             final_rem = st.session_state.get(f"rem_{order_id}", rem_val)
@@ -310,7 +313,6 @@ if menu_selection == "📊 Pipeline Dashboard":
                             final_pal = st.session_state.get(f"pal_{order_id}", int(selected_data['pallet_size']))
                             final_note = st.session_state.get(f"note_{order_id}", selected_data['special_instructions'])
                             
-                            # Guaranteed Math logic
                             if user_role == "👑 Ops Manager/Admin":
                                 if final_inst != inst_val and final_rem == rem_val:
                                     final_rem = total_m2 - final_inst
