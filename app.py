@@ -169,12 +169,11 @@ if menu_selection == "📊 Pipeline Dashboard":
             
             st.markdown("💡 **Click any row to drill down into the order details.**")
             
-            # --- THE FIX: We hide 'ID' and shorten the headers to save maximum horizontal space ---
             selection_event = st.dataframe(
                 styled_df, 
                 use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
                 column_config={
-                    "id": None, # Hiding this claw backs a bunch of pixels!
+                    "id": None, 
                     "customer": "Customer", 
                     "purchase_order": None, 
                     "site_address": "Site", 
@@ -183,15 +182,15 @@ if menu_selection == "📊 Pipeline Dashboard":
                     "special_instructions": None, 
                     "service_type": None, 
                     "transport_detail": None, 
-                    "variety": "Turf", # Shortened
-                    "m2_area": "Ord",  # Shortened
+                    "variety": "Turf", 
+                    "m2_area": "Ord",  
                     "pallet_size": None, "full_pallets": None, "loose_rolls": None,
-                    "harvest_date": "H-Date", # Shortened 
-                    "install_date": "I-Date", # Shortened
+                    "harvest_date": "H-Date", 
+                    "install_date": "I-Date", 
                     "status": "Status",
-                    "amount_harvested": "Harv", # Shortened 
-                    "amount_installed": "Inst", # Shortened
-                    "remaining_balance": "Bal", # Shortened
+                    "amount_harvested": "Harv", 
+                    "amount_installed": "Inst", 
+                    "remaining_balance": "Bal", 
                     "created_at": None
                 }
             )
@@ -232,9 +231,18 @@ if menu_selection == "📊 Pipeline Dashboard":
             with st.container(border=True):
                 po_display = selected_data['purchase_order'] if selected_data['purchase_order'] != "" else "N/A"
                 
+                # --- NEW FUNCTIONALITY: The Clickable Dialer Link ---
+                # We strip out spaces just in case the dialer gets confused, then wrap it in a hyperlink.
+                raw_phone = selected_data['contact_phone']
+                if raw_phone and raw_phone.strip() != "":
+                    clean_phone = raw_phone.replace(" ", "")
+                    phone_link = f"[{raw_phone} 📞](tel:{clean_phone})"
+                else:
+                    phone_link = "N/A"
+                
                 s_col1, s_col2, s_col3 = st.columns(3)
                 with s_col1:
-                    st.markdown(f"**📍 Site Info**\n- **Address:** {selected_data['site_address']}\n- **Contact:** {selected_data['site_contact']}\n- **Phone:** {selected_data['contact_phone']}")
+                    st.markdown(f"**📍 Site Info**\n- **Address:** {selected_data['site_address']}\n- **Contact:** {selected_data['site_contact']}\n- **Phone:** {phone_link}")
                 with s_col2:
                     st.markdown(f"**📋 Logistics**\n- **Cust PO:** {po_display}\n- **Service:** {selected_data['service_type']}\n- **Transport:** {selected_data['transport_detail']}")
                 with s_col3:
