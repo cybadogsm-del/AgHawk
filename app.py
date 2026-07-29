@@ -3,8 +3,17 @@ import pandas as pd
 import sqlite3
 import datetime
 from pathlib import Path
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Turf Galore Sched", layout="wide")
+
+# --- SCROLL TO TOP HACK ---
+if "scroll_to_top" not in st.session_state:
+    st.session_state.scroll_to_top = False
+
+if st.session_state.scroll_to_top:
+    components.html("<script>window.parent.scrollTo(0, 0);</script>", height=0)
+    st.session_state.scroll_to_top = False
 
 # --- DATE FORMATTER HELPER ---
 def format_aus_date(date_str):
@@ -39,10 +48,12 @@ else:
 menu_selection = st.sidebar.radio("Main Menu:", menu_options)
 st.sidebar.divider()
 
-# Reset drill-down if they click a different menu tab
+# Reset drill-down & trigger scroll if they click a different menu tab
 if st.session_state.last_menu != menu_selection:
     st.session_state.editing_order = None
     st.session_state.last_menu = menu_selection
+    st.session_state.scroll_to_top = True
+    st.rerun()
 
 # --- DATABASE SETUP ---
 DB_PATH = Path("turf_orders_v11.db")
@@ -63,6 +74,7 @@ def init_database():
             service_type TEXT DEFAULT '',
             transport_detail TEXT DEFAULT '',
             team_assigned TEXT DEFAULT '',
+            parking_pin TEXT DEFAULT '',
             variety TEXT NOT NULL,
             m2_area INTEGER NOT NULL,
             pallet_size INTEGER DEFAULT 60,
@@ -78,11 +90,13 @@ def init_database():
         )
     """)
     
-    # Safe migration: Add team_assigned to older databases if it doesn't exist
+    # Safe migrations
     cursor.execute("PRAGMA table_info(orders)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'team_assigned' not in columns:
         cursor.execute("ALTER TABLE orders ADD COLUMN team_assigned TEXT DEFAULT ''")
+    if 'parking_pin' not in columns:
+        cursor.execute("ALTER TABLE orders ADD COLUMN parking_pin TEXT DEFAULT ''")
     
     cursor.execute("CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_name TEXT NOT NULL, site_address TEXT NOT NULL)")
@@ -125,7 +139,7 @@ def get_pallet_sizes(): return [row[0] for row in run_query("SELECT size FROM pa
 def get_transport_options(): return [row[0] for row in run_query("SELECT name FROM transport_options ORDER BY name ASC")]
 def get_teams(): return [row[0] for row in run_query("SELECT name FROM teams ORDER BY name ASC")]
 
-def save_new_order(customer, po, site, contact, phone, special, service, transport, team, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status):
+def save_new_order(customer, po, site, contact, phone, special, service, transport, team, pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status):
     existing_sites = get_sites_for_customer(customer)
     if site not in existing_sites and site.strip() != "":
         run_query("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", (customer, site))
@@ -136,10 +150,10 @@ def save_new_order(customer, po, site, contact, phone, special, service, transpo
             run_query("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", (site, contact, phone))
             
     query = """
-        INSERT INTO orders (customer, purchase_order, site_address, site_contact, contact_phone, special_instructions, service_type, transport_detail, team_assigned, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest_date, install_date, status, amount_harvested, amount_installed, remaining_balance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+        INSERT INTO orders (customer, purchase_order, site_address, site_contact, contact_phone, special_instructions, service_type, transport_detail, team_assigned, parking_pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest_date, install_date, status, amount_harvested, amount_installed, remaining_balance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
     """
-    run_query(query, (customer, po, site, contact, phone, special, service, transport, team, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status, m2_area))
+    run_query(query, (customer, po, site, contact, phone, special, service, transport, team, pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status, m2_area))
 
 # Initialize database on app start
 init_database()
@@ -153,7 +167,6 @@ service_options = ["Supply Only", "Supply & Deliver", "Supply & Install"]
 
 # =====================================================================
 # GLOBAL DRILL-DOWN OVERLAY
-# If an order is selected (from any menu), we hijack the screen to show it.
 # =====================================================================
 if st.session_state.editing_order is not None:
     order_id = st.session_state.editing_order
@@ -166,6 +179,7 @@ if st.session_state.editing_order is not None:
         st.error("Order not found.")
         if st.button(f"⬅️ Back to {menu_selection}"):
             st.session_state.editing_order = None
+            st.session_state.scroll_to_top = True
             st.rerun()
     else:
         selected_data = order_df.iloc[0]
@@ -176,6 +190,7 @@ if st.session_state.editing_order is not None:
         
         if st.button(f"⬅️ Back to {menu_selection}"):
             st.session_state.editing_order = None
+            st.session_state.scroll_to_top = True
             st.rerun()
             
         st.title(f"🔍 Order #{order_id} Drill-Down: {selected_data['customer']}")
@@ -189,13 +204,22 @@ if st.session_state.editing_order is not None:
                 phone_link = f"[{raw_phone} 📞](tel:{clean_phone})"
             else:
                 phone_link = "N/A"
+                
+            raw_pin = selected_data.get('parking_pin', '')
+            if raw_pin and raw_pin.strip() != "":
+                # If they pasted a URL, make it clickable. If just text, show it.
+                if raw_pin.startswith("http"):
+                    pin_display = f"[📍 Open Map Link]({raw_pin})"
+                else:
+                    pin_display = f"📍 {raw_pin}"
+            else:
+                pin_display = "None Provided"
             
             s_col1, s_col2, s_col3 = st.columns(3)
             with s_col1:
                 st.markdown(f"**📍 Site Info**\n- **Address:** {selected_data['site_address']}\n- **Contact:** {selected_data['site_contact'] if selected_data['site_contact'] else 'N/A'}\n- **Phone:** {phone_link}")
             with s_col2:
-                # Added the Harvest and Install Dates right here in Logistics
-                st.markdown(f"**📋 Logistics**\n- **Cust PO:** {po_display}\n- **Service:** {selected_data['service_type']}\n- **Team:** {selected_data['team_assigned']}\n- **Transport:** {selected_data['transport_detail']}\n- **Harvest:** {format_aus_date(selected_data['harvest_date'])}\n- **Install:** {format_aus_date(selected_data['install_date'])}")
+                st.markdown(f"**📋 Logistics**\n- **Cust PO:** {po_display}\n- **Service:** {selected_data['service_type']}\n- **Team:** {selected_data['team_assigned']}\n- **Transport:** {selected_data['transport_detail']}\n- **Harvest:** {format_aus_date(selected_data['harvest_date'])}\n- **Install:** {format_aus_date(selected_data['install_date'])}\n- **Parking:** {pin_display}")
             with s_col3:
                 st.markdown(f"**📐 Turf Required**\n- **Total:** {total_m2} M2 ({selected_data['variety']})\n- **Pallets:** {selected_data['pallet_size']} M2\n- **To Cut:** {selected_data['full_pallets']} Full + {selected_data['loose_rolls']} Loose")
 
@@ -232,6 +256,7 @@ if st.session_state.editing_order is not None:
                             st.number_input("Total Harvested (M2)", min_value=0, value=harv_val, step=10, key=f"harv_{order_id}")
                             st.number_input("Total Installed (M2)", min_value=0, value=inst_val, step=10, key=f"inst_{order_id}")
                             st.number_input("Remaining Balance (M2)", value=rem_val, step=1, help="Auto-calculates, but you can override to 0", key=f"rem_{order_id}")
+                            st.text_input("📍 B-Double Parking Pin (Link/Note)", value=selected_data.get('parking_pin', ''), key=f"pin_{order_id}")
                         with col3:
                             st.markdown("**3. Status & Config**")
                             status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
@@ -245,6 +270,7 @@ if st.session_state.editing_order is not None:
                         with col1:
                             st.number_input("Total Harvested (M2)", min_value=0, value=harv_val, step=10, key=f"harv_{order_id}")
                             st.selectbox("Update Transport", transport_list, index=transport_list.index(selected_data['transport_detail']) if selected_data['transport_detail'] in transport_list else 0, key=f"trn_{order_id}")
+                            st.text_input("📍 Add/Edit B-Double Parking Pin (Link)", value=selected_data.get('parking_pin', ''), key=f"pin_{order_id}")
                         with col2:
                             st.selectbox("Update Pallet Size", pallet_options, index=pallet_options.index(int(selected_data['pallet_size'])) if int(selected_data['pallet_size']) in pallet_options else 0, key=f"pal_{order_id}")
                             status_options = ["Pending", "Locked", "Harvested"]
@@ -253,12 +279,15 @@ if st.session_state.editing_order is not None:
                     
                     elif user_role == "👷 Site Supervisors":
                         st.write("**Site Supervisor Edit Mode** (Installations)")
-                        st.number_input("Total Qty Installed (M2)", min_value=0, value=inst_val, step=10, key=f"inst_{order_id}")
-                        st.info("Remaining Balance will automatically calculate when you click Save!")
-                        
-                        status_options = ["Locked", "Harvested", "Installed"]
-                        if selected_data['status'] not in status_options: status_options.append(selected_data['status'])
-                        st.selectbox("Update Status", status_options, index=status_options.index(selected_data['status']), key=f"stat_{order_id}")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.number_input("Total Qty Installed (M2)", min_value=0, value=inst_val, step=10, key=f"inst_{order_id}")
+                            st.info("Remaining Balance will automatically calculate when you click Save!")
+                        with col2:
+                            status_options = ["Locked", "Harvested", "Installed"]
+                            if selected_data['status'] not in status_options: status_options.append(selected_data['status'])
+                            st.selectbox("Update Status", status_options, index=status_options.index(selected_data['status']), key=f"stat_{order_id}")
+                            st.text_input("📍 Drop B-Double Parking Pin (Link/Note)", value=selected_data.get('parking_pin', ''), key=f"pin_{order_id}")
 
                     if st.form_submit_button("💾 Save Order Updates"):
                         
@@ -270,6 +299,7 @@ if st.session_state.editing_order is not None:
                         final_srv = st.session_state.get(f"srv_{order_id}", selected_data['service_type'])
                         final_trn = st.session_state.get(f"trn_{order_id}", selected_data['transport_detail'])
                         final_team = st.session_state.get(f"team_{order_id}", selected_data.get('team_assigned', ''))
+                        final_pin = st.session_state.get(f"pin_{order_id}", selected_data.get('parking_pin', ''))
                         final_stat = st.session_state.get(f"stat_{order_id}", selected_data['status'])
                         final_pal = st.session_state.get(f"pal_{order_id}", int(selected_data['pallet_size']))
                         final_note = st.session_state.get(f"note_{order_id}", selected_data['special_instructions'])
@@ -285,11 +315,12 @@ if st.session_state.editing_order is not None:
                         
                         run_query("""
                             UPDATE orders SET 
-                            purchase_order=?, service_type=?, transport_detail=?, team_assigned=?, special_instructions=?, amount_harvested=?, amount_installed=?, remaining_balance=?, status=?, pallet_size=?, full_pallets=?, loose_rolls=?
+                            purchase_order=?, service_type=?, transport_detail=?, team_assigned=?, parking_pin=?, special_instructions=?, amount_harvested=?, amount_installed=?, remaining_balance=?, status=?, pallet_size=?, full_pallets=?, loose_rolls=?
                             WHERE id=?
-                        """, (final_po, final_srv, final_trn, final_team, final_note, final_harv, final_inst, final_rem, final_stat, final_pal, full_pallets, loose_rolls, order_id))
+                        """, (final_po, final_srv, final_trn, final_team, final_pin, final_note, final_harv, final_inst, final_rem, final_stat, final_pal, full_pallets, loose_rolls, order_id))
                         
                         st.session_state.editing_order = None
+                        st.session_state.scroll_to_top = True
                         st.toast("✅ Order updated successfully!", icon="✅")
                         st.rerun()
 
@@ -315,7 +346,6 @@ elif menu_selection == "📊 Pipeline Dashboard":
     if df.empty:
         st.info("No orders found for this view.")
     else:
-        # Format the dates to DD/MM/YYYY just for display
         df['harvest_date'] = df['harvest_date'].apply(format_aus_date)
         df['install_date'] = df['install_date'].apply(format_aus_date)
         
@@ -342,6 +372,7 @@ elif menu_selection == "📊 Pipeline Dashboard":
                 "service_type": None, 
                 "transport_detail": None, 
                 "team_assigned": "Team",
+                "parking_pin": None,
                 "variety": "Turf", 
                 "m2_area": "Ord",  
                 "pallet_size": None, "full_pallets": None, "loose_rolls": None,
@@ -358,6 +389,7 @@ elif menu_selection == "📊 Pipeline Dashboard":
         if selection_event.selection.rows:
             selected_row = selection_event.selection.rows[0]
             st.session_state.editing_order = int(df.iloc[selected_row]['id'])
+            st.session_state.scroll_to_top = True
             st.rerun()
 
 elif menu_selection == "📋 Daily Run Sheet":
@@ -369,13 +401,12 @@ elif menu_selection == "📋 Daily Run Sheet":
     target_date_str = target_date.strftime("%Y-%m-%d")
     
     conn = sqlite3.connect(DB_PATH)
-    # We pull ID now so we can select it, but hide it in the UI
     harvests = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     installs = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     conn.close()
     
     clean_columns = {
-        "id": None, # Hide the database ID from the table
+        "id": None, 
         "customer": "Customer", "purchase_order": None, "service_type": None, "team_assigned": "Team", "transport_detail": "Transport",
         "site_address": "Site", "site_contact": "Contact", "contact_phone": None, 
         "variety": "Variety", "m2_area": "M2", "full_pallets": "Pallets", 
@@ -390,6 +421,7 @@ elif menu_selection == "📋 Daily Run Sheet":
         sel_harvests = st.dataframe(harvests, use_container_width=True, hide_index=True, column_config=clean_columns, on_select="rerun", selection_mode="single-row")
         if sel_harvests.selection.rows:
             st.session_state.editing_order = int(harvests.iloc[sel_harvests.selection.rows[0]]['id'])
+            st.session_state.scroll_to_top = True
             st.rerun()
         
     st.divider()
@@ -401,6 +433,7 @@ elif menu_selection == "📋 Daily Run Sheet":
         sel_installs = st.dataframe(installs, use_container_width=True, hide_index=True, column_config=clean_columns, on_select="rerun", selection_mode="single-row")
         if sel_installs.selection.rows:
             st.session_state.editing_order = int(installs.iloc[sel_installs.selection.rows[0]]['id'])
+            st.session_state.scroll_to_top = True
             st.rerun()
 
 elif menu_selection == "➕ Enter New Order":
@@ -452,7 +485,7 @@ elif menu_selection == "➕ Enter New Order":
         else:
             final_site = selected_site_option if selected_site_option else ""
 
-    # --- ROW 5: Site Contact & PO ---
+    # --- ROW 5: Site Contact & Parking Pin ---
     r5_col1, r5_col2 = st.columns(2)
     with r5_col1:
         if final_site and final_site != "➕ Add New Site Address":
@@ -478,6 +511,7 @@ elif menu_selection == "➕ Enter New Order":
                 
     with r5_col2:
         po_number = st.text_input("10. Customer PO (Optional)", placeholder="e.g. PO-99214")
+        parking_pin = st.text_input("📍 B-Double Parking Pin Link (Optional)", placeholder="Paste Google Maps link here...")
 
     # --- Extra Fields ---
     st.divider()
@@ -507,8 +541,10 @@ elif menu_selection == "➕ Enter New Order":
             clean_phone = final_phone if final_phone else ""
             clean_transport = selected_transport if selected_transport else "TBA"
             clean_team = selected_team if selected_team else ""
+            clean_pin = parking_pin if parking_pin else ""
             
-            save_new_order(selected_customer, po_number, final_site, clean_contact, clean_phone, special_instructions, selected_service, clean_transport, clean_team, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
+            save_new_order(selected_customer, po_number, final_site, clean_contact, clean_phone, special_instructions, selected_service, clean_transport, clean_team, clean_pin, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
+            st.session_state.scroll_to_top = True
             st.success(f"Order saved! 🚜 Calculated: {full_pallets} Full Pallets + {loose_rolls} Loose Rolls.")
 
 elif menu_selection == "👥 Manage Customers":
@@ -527,6 +563,7 @@ elif menu_selection == "👥 Manage Customers":
                 try:
                     run_query("INSERT INTO customers (name) VALUES (?)", (new_name.strip().upper(),))
                     st.success(f"Added {new_name.upper()}!")
+                    st.session_state.scroll_to_top = True
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("That customer already exists!")
@@ -537,6 +574,7 @@ elif menu_selection == "👥 Manage Customers":
             if st.button("Delete Customer"):
                 run_query("DELETE FROM customers WHERE name = ?", (del_cust,))
                 st.success(f"Deleted {del_cust}")
+                st.session_state.scroll_to_top = True
                 st.rerun()
 
 elif menu_selection == "⚙️ System Settings":
