@@ -28,8 +28,8 @@ else:
 menu_selection = st.sidebar.radio("Main Menu:", menu_options)
 st.sidebar.divider()
 
-# --- DATABASE SETUP ---
-DB_PATH = Path("turf_orders_v10.db")
+# --- DATABASE SETUP (v11) ---
+DB_PATH = Path("turf_orders_v11.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
@@ -284,30 +284,50 @@ elif menu_selection == "➕ Enter New Order":
         po_number = st.text_input("Customer Purchase Order (Optional)", placeholder="e.g. PO-99214")
     
     if selected_customer:
+        st.divider()
+        st.subheader("📍 Job Site Details")
         existing_sites = get_sites_for_customer(selected_customer)
-        site_options = existing_sites + ["➕ Add New Site Address..."]
-        selected_site = st.selectbox("2. Select Job Site", site_options, index=None, placeholder="Choose a Job Site...")
         
-        if selected_site == "➕ Add New Site Address...": final_site = st.text_input("Type the New Site Address:")
-        elif selected_site: final_site = selected_site
-        else: final_site = ""
+        # SMART UI: Automatically ask for a new site if they have none saved
+        if not existing_sites:
+            st.info(f"No previous sites found for {selected_customer}. Enter their first site below.")
+            site_mode = "➕ Enter New Site"
+        else:
+            site_mode = st.radio("Job Site Options:", ["📂 Select Existing Site", "➕ Enter New Site"], horizontal=True)
+            
+        if site_mode == "📂 Select Existing Site":
+            final_site = st.selectbox("Choose Job Site:", existing_sites, index=None, placeholder="Select a saved site...")
+        else:
+            final_site = st.text_input("Type New Job Site Address:")
             
         if final_site and final_site.strip() != "":
+            st.write("---")
+            st.subheader("👤 Site Contact")
             existing_contacts = get_contacts_for_site(final_site)
-            contact_names = [c["name"] for c in existing_contacts]
-            contact_options = contact_names + ["➕ Add New Contact..."]
-            selected_contact = st.selectbox("3. Select Site Contact", contact_options, index=None, placeholder="Choose a Contact...")
             
-            if selected_contact == "➕ Add New Contact...":
-                final_contact = st.text_input("Type the New Contact's Name:")
-                final_phone = st.text_input("Type the New Contact's Phone:")
-            elif selected_contact:
-                final_contact = selected_contact
-                matching_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "")
-                final_phone = st.text_input("Contact's Phone", value=matching_phone, disabled=True)
+            # SMART UI: Automatically ask for a new contact if the site has none
+            if not existing_contacts:
+                st.info("No contacts saved for this site. Enter a new one below.")
+                contact_mode = "➕ Enter New Contact"
             else:
-                final_contact = ""
-                final_phone = ""
+                contact_mode = st.radio("Contact Options:", ["📂 Select Existing Contact", "➕ Enter New Contact"], horizontal=True)
+                
+            if contact_mode == "📂 Select Existing Contact":
+                contact_names = [c["name"] for c in existing_contacts]
+                selected_contact = st.selectbox("Choose Contact:", contact_names, index=None, placeholder="Select a saved contact...")
+                if selected_contact:
+                    final_contact = selected_contact
+                    matching_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "")
+                    final_phone = st.text_input("Phone Number:", value=matching_phone, disabled=True)
+                else:
+                    final_contact = ""
+                    final_phone = ""
+            else:
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    final_contact = st.text_input("Type New Contact Name:")
+                with col_c2:
+                    final_phone = st.text_input("Type New Contact Phone:")
         else:
             final_contact = ""
             final_phone = ""
