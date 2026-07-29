@@ -15,12 +15,14 @@ menu_selection = st.sidebar.radio("Main Menu:", [
 ])
 st.sidebar.divider()
 
-# --- DATABASE SETUP (Upgraded to v2 for new math fields) ---
-DB_PATH = Path("turf_orders_v2.db")
+# --- DATABASE SETUP (Upgraded to v3 for Customers Table) ---
+DB_PATH = Path("turf_orders_v3.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    # 1. Create Orders Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +37,16 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Seed initial data if empty
+    
+    # 2. Create Customers Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL
+        )
+    """)
+    
+    # Seed initial orders if empty
     cursor.execute("SELECT COUNT(*) FROM orders")
     if cursor.fetchone()[0] == 0:
         initial_orders = [
@@ -46,9 +57,17 @@ def init_database():
             INSERT INTO orders (customer, variety, m2_area, harvest_date, install_date, status, amount_installed, remaining_balance)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, initial_orders)
-        conn.commit()
+        
+    # Seed initial customers if empty
+    cursor.execute("SELECT COUNT(*) FROM customers")
+    if cursor.fetchone()[0] == 0:
+        initial_customers = [("EXCELL GRAY",), ("FLEMINGS",), ("NEDGE",), ("GREEN CONCEPTS",)]
+        cursor.executemany("INSERT INTO customers (name) VALUES (?)", initial_customers)
+
+    conn.commit()
     conn.close()
 
+# --- DATABASE HELPER FUNCTIONS ---
 def get_all_orders():
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
@@ -67,11 +86,34 @@ def add_order(customer, variety, m2_area, harvest_date, install_date, status):
     conn.close()
     return order_id
 
+def get_customer_names():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM customers ORDER BY name ASC")
+    # Fetch all names and put them in a simple list
+    names = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return names
+
+def add_new_customer(name):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        # Convert to UPPERCASE to keep data clean
+        cursor.execute("INSERT INTO customers (name) VALUES (?)", (name.strip().upper(),))
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        # This triggers if the name already exists because we set name to UNIQUE
+        return False
+
 # Initialize database on app start
 init_database()
 
 # --- DYNAMIC LISTS ---
-customers = ["EXCELL GRAY", "FLEMINGS", "NEDGE", "GREEN CONCEPTS"]
+# Customers are now pulled live from the database!
+customers = get_customer_names() 
 pallet_options = [60, 70, 80]
 varieties = ["Kikuyu", "Santa Anna Couch", "Buffalo"]
 
@@ -88,14 +130,13 @@ if menu_selection == "📊 Pipeline Dashboard":
     else:
         def row_color(row):
             if row['status'] == 'Installed':
-                return ['background-color: #e2e3e5; color: #6c757d'] * len(row) # Grey for completed
+                return ['background-color: #e2e3e5; color: #6c757d'] * len(row)
             elif row['harvest_date'] != "" and row['install_date'] != "":
-                return ['background-color: #d4edda; color: black'] * len(row) # Green for scheduled
-            return ['background-color: #fff3cd; color: black'] * len(row) # Yellow for pending
+                return ['background-color: #d4edda; color: black'] * len(row)
+            return ['background-color: #fff3cd; color: black'] * len(row)
             
         styled_df = df.style.apply(row_color, axis=1)
         
-        # We add formatting here to make the table headers neat and fit the screen perfectly!
         selection_event = st.dataframe(
             styled_df, 
             use_container_width=True, 
@@ -112,7 +153,7 @@ if menu_selection == "📊 Pipeline Dashboard":
                 "status": "Status",
                 "amount_installed": "Installed M2",
                 "remaining_balance": "Remaining M2",
-                "created_at": None  # This hides the messy database timestamp!
+                "created_at": None
             }
         )
         
@@ -124,7 +165,6 @@ if menu_selection == "📊 Pipeline Dashboard":
             order_id = int(selected_data['id'])
             
             st.subheader(f"📝 Edit Order #{order_id} - {selected_data['customer']}")
-            
             st.write(f"**Total Area Ordered:** {selected_data['m2_area']} M2")
             
             col1, col2 = st.columns(2)
@@ -133,7 +173,6 @@ if menu_selection == "📊 Pipeline Dashboard":
                 new_installed = st.number_input("Total Amount Installed (M2)", min_value=0, value=current_installed, step=10)
             
             with col2:
-                # Math happens instantly now!
                 auto_remaining = int(selected_data['m2_area']) - new_installed
                 new_remaining = st.number_input("Remaining Balance (M2) - Manual Override", value=auto_remaining, step=1)
             
@@ -144,7 +183,6 @@ if menu_selection == "📊 Pipeline Dashboard":
             
             new_status = st.selectbox("Update Status", status_options, index=status_options.index(current_status))
 
-            # Changed from form submit to a standard button
             if st.button("Save Order Updates"):
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
@@ -188,7 +226,28 @@ elif menu_selection == "➕ Enter New Order":
 
 elif menu_selection == "👥 Manage Customers":
     st.title("👥 Manage Customers")
-    st.info("Customer management tools will go here.")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Current Customer List")
+        # Display the list of customers neatly
+        st.dataframe(pd.DataFrame(customers, columns=["Customer Name"]), use_container_width=True, hide_index=True)
+        
+    with col2:
+        st.subheader("➕ Add New Customer")
+        with st.form("add_customer_form"):
+            new_name = st.text_input("Enter New Customer Name:")
+            if st.form_submit_button("Save to Database"):
+                if new_name == "":
+                    st.error("Please enter a name first.")
+                else:
+                    success = add_new_customer(new_name)
+                    if success:
+                        st.success(f"Added {new_name.upper()} to the system!")
+                        st.rerun()
+                    else:
+                        st.error("That customer already exists in the system!")
 
 elif menu_selection == "⚙️ System Settings":
     st.title("⚙️ System Settings")
