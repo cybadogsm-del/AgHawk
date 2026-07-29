@@ -30,7 +30,7 @@ else:
 menu_selection = st.sidebar.radio("Main Menu:", menu_options)
 st.sidebar.divider()
 
-# --- DATABASE SETUP (v9 - Added Special Instructions & Harvest Qty) ---
+# --- DATABASE SETUP (v9) ---
 DB_PATH = Path("turf_orders_v9.db")
 
 def init_database():
@@ -166,16 +166,12 @@ if menu_selection == "📊 Pipeline Dashboard":
             order_id = int(selected_data['id'])
             st.subheader(f"📝 Order #{order_id} Details")
             
-            # Show notes to everyone!
             if selected_data['special_instructions'] != "":
                 st.info(f"**Special Instructions:** {selected_data['special_instructions']}")
-            
-            # ---- ROLE-BASED EDITING LOGIC ----
             
             if user_role in ["🚚 Linehaul Drivers", "🛠️ Installers"]:
                 st.warning("Read-Only Mode: Your access level only permits viewing the schedule.")
             else:
-                # Grab current values
                 new_instructions = selected_data['special_instructions']
                 new_pallet_size = int(selected_data['pallet_size'])
                 new_harvested = int(selected_data['amount_harvested'])
@@ -212,16 +208,13 @@ if menu_selection == "📊 Pipeline Dashboard":
                 elif user_role == "👷 Site Supervisors":
                     st.write("**Site Supervisor Edit Mode** (Installations)")
                     new_installed = st.number_input("Update Qty Installed (M2)", min_value=0, value=new_installed, step=10)
-                    # Auto-calculate balance behind the scenes since they don't have override rights!
                     new_remaining = int(selected_data['m2_area']) - new_installed
                     
                     status_options = ["Locked", "Harvested", "Installed"]
                     if new_status not in status_options: status_options.append(new_status)
                     new_status = st.selectbox("Update Status", status_options, index=status_options.index(new_status))
 
-                # Universal Save Button for permitted roles
                 if st.button("Save Order Updates"):
-                    # Recalculate pallets automatically if farm staff changed the pallet size!
                     full_pallets = int(selected_data['m2_area'] // new_pallet_size)
                     loose_rolls = int(selected_data['m2_area'] % new_pallet_size)
                     
@@ -266,29 +259,44 @@ elif menu_selection == "➕ Enter New Order":
     st.title("➕ Queue New Order")
     
     customers = get_customers()
-    selected_customer = st.selectbox("1. Select Customer", customers)
+    # Using index=None makes the box completely blank by default!
+    selected_customer = st.selectbox("1. Select Customer", customers, index=None, placeholder="Choose a Customer...")
     
-    existing_sites = get_sites_for_customer(selected_customer)
-    site_options = existing_sites + ["➕ Add New Site Address..."]
-    selected_site = st.selectbox("2. Select Job Site", site_options)
-    
-    if selected_site == "➕ Add New Site Address...": final_site = st.text_input("Type the New Site Address:")
-    else: final_site = selected_site
+    # Hide the site/contact boxes until a customer is actually picked
+    if selected_customer:
+        existing_sites = get_sites_for_customer(selected_customer)
+        site_options = existing_sites + ["➕ Add New Site Address..."]
+        selected_site = st.selectbox("2. Select Job Site", site_options, index=None, placeholder="Choose a Job Site...")
         
-    if final_site and final_site.strip() != "":
-        existing_contacts = get_contacts_for_site(final_site)
-        contact_names = [c["name"] for c in existing_contacts]
-        contact_options = contact_names + ["➕ Add New Contact..."]
-        selected_contact = st.selectbox("3. Select Site Contact", contact_options)
-        
-        if selected_contact == "➕ Add New Contact...":
-            final_contact = st.text_input("Type the New Contact's Name:")
-            final_phone = st.text_input("Type the New Contact's Phone:")
+        if selected_site == "➕ Add New Site Address...": 
+            final_site = st.text_input("Type the New Site Address:")
+        elif selected_site: 
+            final_site = selected_site
         else:
-            final_contact = selected_contact
-            matching_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "")
-            final_phone = st.text_input("Contact's Phone", value=matching_phone, disabled=True)
+            final_site = ""
+            
+        if final_site and final_site.strip() != "":
+            existing_contacts = get_contacts_for_site(final_site)
+            contact_names = [c["name"] for c in existing_contacts]
+            contact_options = contact_names + ["➕ Add New Contact..."]
+            selected_contact = st.selectbox("3. Select Site Contact", contact_options, index=None, placeholder="Choose a Contact...")
+            
+            if selected_contact == "➕ Add New Contact...":
+                final_contact = st.text_input("Type the New Contact's Name:")
+                final_phone = st.text_input("Type the New Contact's Phone:")
+            elif selected_contact:
+                final_contact = selected_contact
+                matching_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "")
+                final_phone = st.text_input("Contact's Phone", value=matching_phone, disabled=True)
+            else:
+                final_contact = ""
+                final_phone = ""
+        else:
+            final_contact = ""
+            final_phone = ""
     else:
+        # If no customer selected, set all these to empty so the form won't submit
+        final_site = ""
         final_contact = ""
         final_phone = ""
         
@@ -296,23 +304,29 @@ elif menu_selection == "➕ Enter New Order":
     st.subheader("Turf Details & Logistics")
     col1, col2 = st.columns(2)
     with col1:
-        variety = st.selectbox("Turf Variety", varieties)
-        m2_area = st.number_input("Total M2 Area Required", min_value=0, step=10, value=0)
-        selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options)
+        variety = st.selectbox("Turf Variety", varieties, index=None, placeholder="Select Turf Variety...")
+        m2_area = st.number_input("Total M2 Area Required", min_value=10, step=10, value=None, placeholder="Enter total area...")
+        selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options, index=None, placeholder="Select Pallet Size...")
     with col2:
         tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=True)
         if not tba_dates:
-            harvest_date = st.date_input("Confirmed Harvest Date")
-            install_date = st.date_input("Confirmed Install Date")
+            # Dates are also blank by default now
+            harvest_date = st.date_input("Confirmed Harvest Date", value=None)
+            install_date = st.date_input("Confirmed Install Date", value=None)
         else:
             harvest_date = None
             install_date = None
 
     special_instructions = st.text_area("Special Instructions (Optional)", placeholder="e.g., Gate code is 1234, call Dave before arriving...")
 
+    # Strict Validation: Refuse to save if the boxes are still blank
     if st.button("Save New Order & Calculate Pallets"):
-        if final_site.strip() == "" or final_contact.strip() == "": st.error("Please fill in the Site and Contact details!")
-        elif m2_area == 0: st.error("Please enter a Total M2 Area greater than 0!")
+        if not selected_customer: st.error("Please select a Customer!")
+        elif final_site.strip() == "" or final_contact.strip() == "": st.error("Please fill in the Site and Contact details!")
+        elif not variety: st.error("Please select a Turf Variety!")
+        elif not m2_area: st.error("Please enter a Total M2 Area!")
+        elif not selected_pallet: st.error("Please select a Pallet Size!")
+        elif not tba_dates and (not harvest_date or not install_date): st.error("Please select both Harvest and Install dates!")
         else:
             full_pallets = int(m2_area // selected_pallet)
             loose_rolls = int(m2_area % selected_pallet)
