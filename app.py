@@ -6,6 +6,12 @@ from pathlib import Path
 
 st.set_page_config(page_title="Turf Galore Sched", layout="wide")
 
+# --- DATE FORMATTER HELPER ---
+def format_aus_date(date_str):
+    if not date_str: return ""
+    try: return datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except: return date_str
+
 # --- SESSION STATE FOR DRILL-DOWN ---
 if "editing_order" not in st.session_state:
     st.session_state.editing_order = None
@@ -145,221 +151,231 @@ transport_list = get_transport_options()
 teams_list = get_teams()
 service_options = ["Supply Only", "Supply & Deliver", "Supply & Install"]
 
-# --- ROUTING LOGIC BASED ON MENU ---
-
-if menu_selection == "📊 Pipeline Dashboard":
+# =====================================================================
+# GLOBAL DRILL-DOWN OVERLAY
+# If an order is selected (from any menu), we hijack the screen to show it.
+# =====================================================================
+if st.session_state.editing_order is not None:
+    order_id = st.session_state.editing_order
     
-    if st.session_state.editing_order is None:
-        st.title("🚜 Turf Galore Sched — Ops Dashboard")
-        
-        col_filter, _ = st.columns([1, 3])
-        with col_filter:
-            view_mode = st.selectbox("View Filter:", ["Active Pipeline (Pending/Locked/Harvested)", "Completed & Cancelled", "Show All Orders"])
-        
-        conn = sqlite3.connect(DB_PATH)
-        if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
-            df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY created_at DESC", conn)
-        elif view_mode == "Completed & Cancelled":
-            df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Installed', 'Cancelled') ORDER BY created_at DESC", conn)
-        else:
-            df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
-        conn.close()
-        
-        if df.empty:
-            st.info("No orders found for this view.")
-        else:
-            def row_color(row):
-                if row['status'] in ['Installed', 'Cancelled']: return ['background-color: #e2e3e5; color: #6c757d'] * len(row)
-                elif row['harvest_date'] != "" and row['install_date'] != "": return ['background-color: #d4edda; color: black'] * len(row)
-                return ['background-color: #fff3cd; color: black'] * len(row)
-                
-            styled_df = df.style.apply(row_color, axis=1)
-            
-            st.markdown("💡 **Click any row to drill down into the order details.**")
-            
-            selection_event = st.dataframe(
-                styled_df, 
-                use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
-                column_config={
-                    "id": None, 
-                    "customer": "Customer", 
-                    "purchase_order": None, 
-                    "site_address": "Site", 
-                    "site_contact": None, 
-                    "contact_phone": None, 
-                    "special_instructions": None, 
-                    "service_type": None, 
-                    "transport_detail": None, 
-                    "team_assigned": "Team",
-                    "variety": "Turf", 
-                    "m2_area": "Ord",  
-                    "pallet_size": None, "full_pallets": None, "loose_rolls": None,
-                    "harvest_date": "H-Date", 
-                    "install_date": "I-Date", 
-                    "status": "Status",
-                    "amount_harvested": "Harv", 
-                    "amount_installed": "Inst", 
-                    "remaining_balance": "Bal", 
-                    "created_at": None
-                }
-            )
-            
-            if selection_event.selection.rows:
-                selected_row = selection_event.selection.rows[0]
-                st.session_state.editing_order = int(df.iloc[selected_row]['id'])
-                st.rerun()
-
+    conn = sqlite3.connect(DB_PATH)
+    order_df = pd.read_sql_query(f"SELECT * FROM orders WHERE id = {order_id}", conn)
+    conn.close()
+    
+    if order_df.empty:
+        st.error("Order not found.")
+        if st.button(f"⬅️ Back to {menu_selection}"):
+            st.session_state.editing_order = None
+            st.rerun()
     else:
-        order_id = st.session_state.editing_order
+        selected_data = order_df.iloc[0]
+        total_m2 = int(selected_data['m2_area'])
+        harv_val = int(selected_data['amount_harvested'])
+        inst_val = int(selected_data['amount_installed'])
+        rem_val = int(selected_data['remaining_balance'])
         
-        conn = sqlite3.connect(DB_PATH)
-        order_df = pd.read_sql_query(f"SELECT * FROM orders WHERE id = {order_id}", conn)
-        conn.close()
+        if st.button(f"⬅️ Back to {menu_selection}"):
+            st.session_state.editing_order = None
+            st.rerun()
+            
+        st.title(f"🔍 Order #{order_id} Drill-Down: {selected_data['customer']}")
         
-        if order_df.empty:
-            st.error("Order not found.")
-            if st.button("⬅️ Back to Pipeline Dashboard"):
-                st.session_state.editing_order = None
-                st.rerun()
-        else:
-            selected_data = order_df.iloc[0]
-            total_m2 = int(selected_data['m2_area'])
-            harv_val = int(selected_data['amount_harvested'])
-            inst_val = int(selected_data['amount_installed'])
-            rem_val = int(selected_data['remaining_balance'])
+        with st.container(border=True):
+            po_display = selected_data['purchase_order'] if selected_data['purchase_order'] != "" else "N/A"
             
-            if st.button("⬅️ Back to Pipeline Dashboard"):
-                st.session_state.editing_order = None
-                st.rerun()
-                
-            st.title(f"🔍 Order #{order_id} Drill-Down: {selected_data['customer']}")
+            raw_phone = selected_data['contact_phone']
+            if raw_phone and raw_phone.strip() != "":
+                clean_phone = raw_phone.replace(" ", "")
+                phone_link = f"[{raw_phone} 📞](tel:{clean_phone})"
+            else:
+                phone_link = "N/A"
             
-            with st.container(border=True):
-                po_display = selected_data['purchase_order'] if selected_data['purchase_order'] != "" else "N/A"
-                
-                raw_phone = selected_data['contact_phone']
-                if raw_phone and raw_phone.strip() != "":
-                    clean_phone = raw_phone.replace(" ", "")
-                    phone_link = f"[{raw_phone} 📞](tel:{clean_phone})"
-                else:
-                    phone_link = "N/A"
-                
-                s_col1, s_col2, s_col3 = st.columns(3)
-                with s_col1:
-                    st.markdown(f"**📍 Site Info**\n- **Address:** {selected_data['site_address']}\n- **Contact:** {selected_data['site_contact'] if selected_data['site_contact'] else 'N/A'}\n- **Phone:** {phone_link}")
-                with s_col2:
-                    st.markdown(f"**📋 Logistics**\n- **Cust PO:** {po_display}\n- **Service:** {selected_data['service_type']}\n- **Team:** {selected_data['team_assigned']}\n- **Transport:** {selected_data['transport_detail']}")
-                with s_col3:
-                    st.markdown(f"**📐 Turf Required**\n- **Total:** {total_m2} M2 ({selected_data['variety']})\n- **Pallets:** {selected_data['pallet_size']} M2\n- **To Cut:** {selected_data['full_pallets']} Full + {selected_data['loose_rolls']} Loose")
+            s_col1, s_col2, s_col3 = st.columns(3)
+            with s_col1:
+                st.markdown(f"**📍 Site Info**\n- **Address:** {selected_data['site_address']}\n- **Contact:** {selected_data['site_contact'] if selected_data['site_contact'] else 'N/A'}\n- **Phone:** {phone_link}")
+            with s_col2:
+                # Added the Harvest and Install Dates right here in Logistics
+                st.markdown(f"**📋 Logistics**\n- **Cust PO:** {po_display}\n- **Service:** {selected_data['service_type']}\n- **Team:** {selected_data['team_assigned']}\n- **Transport:** {selected_data['transport_detail']}\n- **Harvest:** {format_aus_date(selected_data['harvest_date'])}\n- **Install:** {format_aus_date(selected_data['install_date'])}")
+            with s_col3:
+                st.markdown(f"**📐 Turf Required**\n- **Total:** {total_m2} M2 ({selected_data['variety']})\n- **Pallets:** {selected_data['pallet_size']} M2\n- **To Cut:** {selected_data['full_pallets']} Full + {selected_data['loose_rolls']} Loose")
 
-                st.write("---")
-                
-                st.markdown("**📈 Real-Time Order Progress**")
-                bar_col1, bar_col2 = st.columns(2)
-                with bar_col1:
-                    st.caption(f"Harvested: {harv_val} / {total_m2} M2")
-                    st.progress(min(harv_val / total_m2, 1.0) if total_m2 > 0 else 0.0)
-                with bar_col2:
-                    st.caption(f"Installed: {inst_val} / {total_m2} M2 (Balance: {rem_val} M2)")
-                    st.progress(min(inst_val / total_m2, 1.0) if total_m2 > 0 else 0.0)
+            st.write("---")
+            
+            st.markdown("**📈 Real-Time Order Progress**")
+            bar_col1, bar_col2 = st.columns(2)
+            with bar_col1:
+                st.caption(f"Harvested: {harv_val} / {total_m2} M2")
+                st.progress(min(harv_val / total_m2, 1.0) if total_m2 > 0 else 0.0)
+            with bar_col2:
+                st.caption(f"Installed: {inst_val} / {total_m2} M2 (Balance: {rem_val} M2)")
+                st.progress(min(inst_val / total_m2, 1.0) if total_m2 > 0 else 0.0)
 
-                if selected_data['special_instructions'] != "":
-                    st.warning(f"⚠️ **Notes:** {selected_data['special_instructions']}")
-                
-                st.write("---")
-                
-                if user_role in ["🚚 Linehaul Drivers", "🛠️ Installers"]:
-                    st.error("Read-Only Mode: Your access level only permits viewing the schedule.")
-                else:
-                    with st.form(key=f"edit_form_{order_id}"):
-                        if user_role == "👑 Ops Manager/Admin":
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.markdown("**1. Order Details**")
-                                st.text_input("Customer PO", value=selected_data['purchase_order'], key=f"po_{order_id}")
-                                st.selectbox("Service", service_options, index=service_options.index(selected_data['service_type']) if selected_data['service_type'] in service_options else 0, key=f"srv_{order_id}")
-                                st.selectbox("Transport", transport_list, index=transport_list.index(selected_data['transport_detail']) if selected_data['transport_detail'] in transport_list else 0, key=f"trn_{order_id}")
-                                st.selectbox("Team Assigned", teams_list, index=teams_list.index(selected_data['team_assigned']) if selected_data['team_assigned'] in teams_list else 0, key=f"team_{order_id}")
-                            with col2:
-                                st.markdown("**2. Progress Update**")
-                                st.number_input("Total Harvested (M2)", min_value=0, value=harv_val, step=10, key=f"harv_{order_id}")
-                                st.number_input("Total Installed (M2)", min_value=0, value=inst_val, step=10, key=f"inst_{order_id}")
-                                st.number_input("Remaining Balance (M2)", value=rem_val, step=1, help="Auto-calculates, but you can override to 0", key=f"rem_{order_id}")
-                            with col3:
-                                st.markdown("**3. Status & Config**")
-                                status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
-                                st.selectbox("Update Status", status_options, index=status_options.index(selected_data['status']) if selected_data['status'] in status_options else 0, key=f"stat_{order_id}")
-                                st.selectbox("Pallet Size", pallet_options, index=pallet_options.index(int(selected_data['pallet_size'])) if int(selected_data['pallet_size']) in pallet_options else 0, key=f"pal_{order_id}")
-                                st.text_area("Update Notes", value=selected_data['special_instructions'], key=f"note_{order_id}")
-                        
-                        elif user_role == "🚜 Farm Staff":
-                            st.write("**Farm Staff Edit Mode** (Harvesting & Logistics)")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.number_input("Total Harvested (M2)", min_value=0, value=harv_val, step=10, key=f"harv_{order_id}")
-                                st.selectbox("Update Transport", transport_list, index=transport_list.index(selected_data['transport_detail']) if selected_data['transport_detail'] in transport_list else 0, key=f"trn_{order_id}")
-                            with col2:
-                                st.selectbox("Update Pallet Size", pallet_options, index=pallet_options.index(int(selected_data['pallet_size'])) if int(selected_data['pallet_size']) in pallet_options else 0, key=f"pal_{order_id}")
-                                status_options = ["Pending", "Locked", "Harvested"]
-                                if selected_data['status'] not in status_options: status_options.append(selected_data['status'])
-                                st.selectbox("Update Status", status_options, index=status_options.index(selected_data['status']), key=f"stat_{order_id}")
-                        
-                        elif user_role == "👷 Site Supervisors":
-                            st.write("**Site Supervisor Edit Mode** (Installations)")
-                            st.number_input("Total Qty Installed (M2)", min_value=0, value=inst_val, step=10, key=f"inst_{order_id}")
-                            st.info("Remaining Balance will automatically calculate when you click Save!")
-                            
-                            status_options = ["Locked", "Harvested", "Installed"]
+            if selected_data['special_instructions'] != "":
+                st.warning(f"⚠️ **Notes:** {selected_data['special_instructions']}")
+            
+            st.write("---")
+            
+            if user_role in ["🚚 Linehaul Drivers", "🛠️ Installers"]:
+                st.error("Read-Only Mode: Your access level only permits viewing the schedule.")
+            else:
+                with st.form(key=f"edit_form_{order_id}"):
+                    if user_role == "👑 Ops Manager/Admin":
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.markdown("**1. Order Details**")
+                            st.text_input("Customer PO", value=selected_data['purchase_order'], key=f"po_{order_id}")
+                            st.selectbox("Service", service_options, index=service_options.index(selected_data['service_type']) if selected_data['service_type'] in service_options else 0, key=f"srv_{order_id}")
+                            st.selectbox("Transport", transport_list, index=transport_list.index(selected_data['transport_detail']) if selected_data['transport_detail'] in transport_list else 0, key=f"trn_{order_id}")
+                            st.selectbox("Team Assigned", teams_list, index=teams_list.index(selected_data['team_assigned']) if selected_data['team_assigned'] in teams_list else 0, key=f"team_{order_id}")
+                        with col2:
+                            st.markdown("**2. Progress Update**")
+                            st.number_input("Total Harvested (M2)", min_value=0, value=harv_val, step=10, key=f"harv_{order_id}")
+                            st.number_input("Total Installed (M2)", min_value=0, value=inst_val, step=10, key=f"inst_{order_id}")
+                            st.number_input("Remaining Balance (M2)", value=rem_val, step=1, help="Auto-calculates, but you can override to 0", key=f"rem_{order_id}")
+                        with col3:
+                            st.markdown("**3. Status & Config**")
+                            status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
+                            st.selectbox("Update Status", status_options, index=status_options.index(selected_data['status']) if selected_data['status'] in status_options else 0, key=f"stat_{order_id}")
+                            st.selectbox("Pallet Size", pallet_options, index=pallet_options.index(int(selected_data['pallet_size'])) if int(selected_data['pallet_size']) in pallet_options else 0, key=f"pal_{order_id}")
+                            st.text_area("Update Notes", value=selected_data['special_instructions'], key=f"note_{order_id}")
+                    
+                    elif user_role == "🚜 Farm Staff":
+                        st.write("**Farm Staff Edit Mode** (Harvesting & Logistics)")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.number_input("Total Harvested (M2)", min_value=0, value=harv_val, step=10, key=f"harv_{order_id}")
+                            st.selectbox("Update Transport", transport_list, index=transport_list.index(selected_data['transport_detail']) if selected_data['transport_detail'] in transport_list else 0, key=f"trn_{order_id}")
+                        with col2:
+                            st.selectbox("Update Pallet Size", pallet_options, index=pallet_options.index(int(selected_data['pallet_size'])) if int(selected_data['pallet_size']) in pallet_options else 0, key=f"pal_{order_id}")
+                            status_options = ["Pending", "Locked", "Harvested"]
                             if selected_data['status'] not in status_options: status_options.append(selected_data['status'])
                             st.selectbox("Update Status", status_options, index=status_options.index(selected_data['status']), key=f"stat_{order_id}")
+                    
+                    elif user_role == "👷 Site Supervisors":
+                        st.write("**Site Supervisor Edit Mode** (Installations)")
+                        st.number_input("Total Qty Installed (M2)", min_value=0, value=inst_val, step=10, key=f"inst_{order_id}")
+                        st.info("Remaining Balance will automatically calculate when you click Save!")
+                        
+                        status_options = ["Locked", "Harvested", "Installed"]
+                        if selected_data['status'] not in status_options: status_options.append(selected_data['status'])
+                        st.selectbox("Update Status", status_options, index=status_options.index(selected_data['status']), key=f"stat_{order_id}")
 
-                        if st.form_submit_button("💾 Save Order Updates"):
-                            
-                            final_harv = st.session_state.get(f"harv_{order_id}", harv_val)
-                            final_inst = st.session_state.get(f"inst_{order_id}", inst_val)
-                            final_rem = st.session_state.get(f"rem_{order_id}", rem_val)
-                            
-                            final_po = st.session_state.get(f"po_{order_id}", selected_data['purchase_order'])
-                            final_srv = st.session_state.get(f"srv_{order_id}", selected_data['service_type'])
-                            final_trn = st.session_state.get(f"trn_{order_id}", selected_data['transport_detail'])
-                            final_team = st.session_state.get(f"team_{order_id}", selected_data.get('team_assigned', ''))
-                            final_stat = st.session_state.get(f"stat_{order_id}", selected_data['status'])
-                            final_pal = st.session_state.get(f"pal_{order_id}", int(selected_data['pallet_size']))
-                            final_note = st.session_state.get(f"note_{order_id}", selected_data['special_instructions'])
-                            
-                            if user_role == "👑 Ops Manager/Admin":
-                                if final_inst != inst_val and final_rem == rem_val:
-                                    final_rem = total_m2 - final_inst
-                            elif user_role == "👷 Site Supervisors":
+                    if st.form_submit_button("💾 Save Order Updates"):
+                        
+                        final_harv = st.session_state.get(f"harv_{order_id}", harv_val)
+                        final_inst = st.session_state.get(f"inst_{order_id}", inst_val)
+                        final_rem = st.session_state.get(f"rem_{order_id}", rem_val)
+                        
+                        final_po = st.session_state.get(f"po_{order_id}", selected_data['purchase_order'])
+                        final_srv = st.session_state.get(f"srv_{order_id}", selected_data['service_type'])
+                        final_trn = st.session_state.get(f"trn_{order_id}", selected_data['transport_detail'])
+                        final_team = st.session_state.get(f"team_{order_id}", selected_data.get('team_assigned', ''))
+                        final_stat = st.session_state.get(f"stat_{order_id}", selected_data['status'])
+                        final_pal = st.session_state.get(f"pal_{order_id}", int(selected_data['pallet_size']))
+                        final_note = st.session_state.get(f"note_{order_id}", selected_data['special_instructions'])
+                        
+                        if user_role == "👑 Ops Manager/Admin":
+                            if final_inst != inst_val and final_rem == rem_val:
                                 final_rem = total_m2 - final_inst
-                                
-                            full_pallets = int(total_m2 // final_pal)
-                            loose_rolls = int(total_m2 % final_pal)
+                        elif user_role == "👷 Site Supervisors":
+                            final_rem = total_m2 - final_inst
                             
-                            run_query("""
-                                UPDATE orders SET 
-                                purchase_order=?, service_type=?, transport_detail=?, team_assigned=?, special_instructions=?, amount_harvested=?, amount_installed=?, remaining_balance=?, status=?, pallet_size=?, full_pallets=?, loose_rolls=?
-                                WHERE id=?
-                            """, (final_po, final_srv, final_trn, final_team, final_note, final_harv, final_inst, final_rem, final_stat, final_pal, full_pallets, loose_rolls, order_id))
-                            
-                            st.session_state.editing_order = None
-                            st.toast("✅ Order updated successfully!", icon="✅")
-                            st.rerun()
+                        full_pallets = int(total_m2 // final_pal)
+                        loose_rolls = int(total_m2 % final_pal)
+                        
+                        run_query("""
+                            UPDATE orders SET 
+                            purchase_order=?, service_type=?, transport_detail=?, team_assigned=?, special_instructions=?, amount_harvested=?, amount_installed=?, remaining_balance=?, status=?, pallet_size=?, full_pallets=?, loose_rolls=?
+                            WHERE id=?
+                        """, (final_po, final_srv, final_trn, final_team, final_note, final_harv, final_inst, final_rem, final_stat, final_pal, full_pallets, loose_rolls, order_id))
+                        
+                        st.session_state.editing_order = None
+                        st.toast("✅ Order updated successfully!", icon="✅")
+                        st.rerun()
+
+# =====================================================================
+# ROUTING LOGIC BASED ON MENU (Only runs if NOT drilling down)
+# =====================================================================
+elif menu_selection == "📊 Pipeline Dashboard":
+    st.title("🚜 Turf Galore Sched — Ops Dashboard")
+    
+    col_filter, _ = st.columns([1, 3])
+    with col_filter:
+        view_mode = st.selectbox("View Filter:", ["Active Pipeline (Pending/Locked/Harvested)", "Completed & Cancelled", "Show All Orders"])
+    
+    conn = sqlite3.connect(DB_PATH)
+    if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
+        df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY created_at DESC", conn)
+    elif view_mode == "Completed & Cancelled":
+        df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Installed', 'Cancelled') ORDER BY created_at DESC", conn)
+    else:
+        df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
+    conn.close()
+    
+    if df.empty:
+        st.info("No orders found for this view.")
+    else:
+        # Format the dates to DD/MM/YYYY just for display
+        df['harvest_date'] = df['harvest_date'].apply(format_aus_date)
+        df['install_date'] = df['install_date'].apply(format_aus_date)
+        
+        def row_color(row):
+            if row['status'] in ['Installed', 'Cancelled']: return ['background-color: #e2e3e5; color: #6c757d'] * len(row)
+            elif row['harvest_date'] != "" and row['install_date'] != "": return ['background-color: #d4edda; color: black'] * len(row)
+            return ['background-color: #fff3cd; color: black'] * len(row)
+            
+        styled_df = df.style.apply(row_color, axis=1)
+        
+        st.markdown("💡 **Click any row to drill down into the order details.**")
+        
+        selection_event = st.dataframe(
+            styled_df, 
+            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
+            column_config={
+                "id": None, 
+                "customer": "Customer", 
+                "purchase_order": None, 
+                "site_address": "Site", 
+                "site_contact": None, 
+                "contact_phone": None, 
+                "special_instructions": None, 
+                "service_type": None, 
+                "transport_detail": None, 
+                "team_assigned": "Team",
+                "variety": "Turf", 
+                "m2_area": "Ord",  
+                "pallet_size": None, "full_pallets": None, "loose_rolls": None,
+                "harvest_date": "H-Date", 
+                "install_date": "I-Date", 
+                "status": "Status",
+                "amount_harvested": "Harv", 
+                "amount_installed": "Inst", 
+                "remaining_balance": "Bal", 
+                "created_at": None
+            }
+        )
+        
+        if selection_event.selection.rows:
+            selected_row = selection_event.selection.rows[0]
+            st.session_state.editing_order = int(df.iloc[selected_row]['id'])
+            st.rerun()
 
 elif menu_selection == "📋 Daily Run Sheet":
     st.title("📋 Daily Run Sheet")
     
     col_date, _ = st.columns([1, 3])
     with col_date:
-        target_date = st.date_input("Select Date for Run Sheet", datetime.date.today())
+        target_date = st.date_input("Select Date for Run Sheet", datetime.date.today(), format="DD/MM/YYYY")
     target_date_str = target_date.strftime("%Y-%m-%d")
     
     conn = sqlite3.connect(DB_PATH)
-    harvests = pd.read_sql_query("SELECT customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
-    installs = pd.read_sql_query("SELECT customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
+    # We pull ID now so we can select it, but hide it in the UI
+    harvests = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
+    installs = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     conn.close()
     
     clean_columns = {
+        "id": None, # Hide the database ID from the table
         "customer": "Customer", "purchase_order": None, "service_type": None, "team_assigned": "Team", "transport_detail": "Transport",
         "site_address": "Site", "site_contact": "Contact", "contact_phone": None, 
         "variety": "Variety", "m2_area": "M2", "full_pallets": "Pallets", 
@@ -367,15 +383,25 @@ elif menu_selection == "📋 Daily Run Sheet":
         "amount_harvested": "Harv. M2", "amount_installed": "Inst. M2"
     }
 
-    st.subheader(f"🚜 Harvests for {target_date.strftime('%d %b %Y')}")
+    st.subheader(f"🚜 Harvests for {target_date.strftime('%d/%m/%Y')}")
     if harvests.empty: st.info("No harvests scheduled for this date.")
-    else: st.dataframe(harvests, use_container_width=True, hide_index=True, column_config=clean_columns)
+    else: 
+        st.markdown("💡 **Click any row to view full order.**")
+        sel_harvests = st.dataframe(harvests, use_container_width=True, hide_index=True, column_config=clean_columns, on_select="rerun", selection_mode="single-row")
+        if sel_harvests.selection.rows:
+            st.session_state.editing_order = int(harvests.iloc[sel_harvests.selection.rows[0]]['id'])
+            st.rerun()
         
     st.divider()
     
-    st.subheader(f"🌱 Installs for {target_date.strftime('%d %b %Y')}")
+    st.subheader(f"🌱 Installs for {target_date.strftime('%d/%m/%Y')}")
     if installs.empty: st.info("No installs scheduled for this date.")
-    else: st.dataframe(installs, use_container_width=True, hide_index=True, column_config=clean_columns)
+    else: 
+        st.markdown("💡 **Click any row to view full order.**")
+        sel_installs = st.dataframe(installs, use_container_width=True, hide_index=True, column_config=clean_columns, on_select="rerun", selection_mode="single-row")
+        if sel_installs.selection.rows:
+            st.session_state.editing_order = int(installs.iloc[sel_installs.selection.rows[0]]['id'])
+            st.rerun()
 
 elif menu_selection == "➕ Enter New Order":
     st.title("➕ Queue New Order")
@@ -386,9 +412,9 @@ elif menu_selection == "➕ Enter New Order":
     r1_col1, r1_col2 = st.columns(2)
     with r1_col1:
         if not tba_dates:
-            install_date = st.date_input("1. Confirmed Install Date", value=None)
+            install_date = st.date_input("1. Confirmed Install Date", value=None, format="DD/MM/YYYY")
             default_harvest = (install_date - datetime.timedelta(days=1)) if install_date else None
-            harvest_date = st.date_input("Confirmed Harvest Date (Auto-Calculated)", value=default_harvest)
+            harvest_date = st.date_input("Confirmed Harvest Date (Auto-Calculated)", value=default_harvest, format="DD/MM/YYYY")
         else:
             install_date = None
             harvest_date = None
