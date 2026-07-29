@@ -15,8 +15,8 @@ menu_selection = st.sidebar.radio("Main Menu:", [
 ])
 st.sidebar.divider()
 
-# --- DATABASE SETUP (Upgraded to v5 for Cascading Sites & Contacts) ---
-DB_PATH = Path("turf_orders_v5.db")
+# --- DATABASE SETUP (Upgraded to v6 for Turf Varieties) ---
+DB_PATH = Path("turf_orders_v6.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
@@ -49,15 +49,21 @@ def init_database():
     
     # 4. Create Contacts Table
     cursor.execute("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
+
+    # 5. Create Varieties Table (NEW!)
+    cursor.execute("CREATE TABLE IF NOT EXISTS varieties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     
     # Seed initial data to prevent empty errors
     cursor.execute("SELECT COUNT(*) FROM customers")
     if cursor.fetchone()[0] == 0:
         cursor.executemany("INSERT INTO customers (name) VALUES (?)", [("EXCELL GRAY",), ("FLEMINGS",), ("NEDGE",), ("GREEN CONCEPTS",)])
-        
-        # Seed one fake site and contact so you can see how it works!
         cursor.execute("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", ("EXCELL GRAY", "123 Spring St, Melbourne"))
         cursor.execute("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", ("123 Spring St, Melbourne", "Dave Foreman", "0412 345 678"))
+
+    # Seed initial varieties
+    cursor.execute("SELECT COUNT(*) FROM varieties")
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany("INSERT INTO varieties (name) VALUES (?)", [("Kikuyu",), ("Santa Anna Couch",), ("Buffalo",)])
 
     conn.commit()
     conn.close()
@@ -79,23 +85,22 @@ def get_sites_for_customer(customer_name):
     return [row[0] for row in run_query("SELECT site_address FROM sites WHERE customer_name = ?", (customer_name,))]
 
 def get_contacts_for_site(site_address):
-    # Returns a list of dictionaries with name and phone
     rows = run_query("SELECT contact_name, phone FROM contacts WHERE site_address = ?", (site_address,))
     return [{"name": r[0], "phone": r[1]} for r in rows]
 
+def get_varieties():
+    return [row[0] for row in run_query("SELECT name FROM varieties ORDER BY name ASC")]
+
 def save_new_order(customer, site, contact, phone, variety, m2_area, harvest, install, status):
-    # 1. Save site if it doesn't exist
     existing_sites = get_sites_for_customer(customer)
     if site not in existing_sites and site.strip() != "":
         run_query("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", (customer, site))
         
-    # 2. Save contact if it doesn't exist
     if site.strip() != "" and contact.strip() != "":
         existing_contacts = [c["name"] for c in get_contacts_for_site(site)]
         if contact not in existing_contacts:
             run_query("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", (site, contact, phone))
             
-    # 3. Save the actual order
     query = """
         INSERT INTO orders (customer, site_address, site_contact, contact_phone, variety, m2_area, harvest_date, install_date, status, amount_installed, remaining_balance)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
@@ -107,7 +112,7 @@ init_database()
 
 # --- DYNAMIC LISTS ---
 pallet_options = [60, 70, 80]
-varieties = ["Kikuyu", "Santa Anna Couch", "Buffalo"]
+varieties = get_varieties() # Now pulled live from the database!
 
 # --- ROUTING LOGIC BASED ON MENU ---
 
@@ -141,7 +146,6 @@ if menu_selection == "📊 Pipeline Dashboard":
         )
         st.divider()
         
-        # Edit section below table
         selected_row = selection_event.selection.rows
         if selected_row:
             selected_data = df.iloc[selected_row[0]]
@@ -173,11 +177,9 @@ if menu_selection == "📊 Pipeline Dashboard":
 elif menu_selection == "➕ Enter New Order":
     st.title("➕ Queue New Order")
     
-    # NO MORE FORM! The page updates instantly as you click.
     customers = get_customers()
     selected_customer = st.selectbox("1. Select Customer", customers)
     
-    # Cascading Logic for Sites
     existing_sites = get_sites_for_customer(selected_customer)
     site_options = existing_sites + ["➕ Add New Site Address..."]
     selected_site = st.selectbox("2. Select Job Site", site_options)
@@ -187,7 +189,6 @@ elif menu_selection == "➕ Enter New Order":
     else:
         final_site = selected_site
         
-    # Cascading Logic for Contacts
     if final_site and final_site.strip() != "":
         existing_contacts = get_contacts_for_site(final_site)
         contact_names = [c["name"] for c in existing_contacts]
@@ -199,7 +200,6 @@ elif menu_selection == "➕ Enter New Order":
             final_phone = st.text_input("Type the New Contact's Phone:")
         else:
             final_contact = selected_contact
-            # Find the phone number for the picked contact
             matching_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "")
             final_phone = st.text_input("Contact's Phone", value=matching_phone, disabled=True)
     else:
@@ -221,7 +221,6 @@ elif menu_selection == "➕ Enter New Order":
             harvest_date = None
             install_date = None
 
-    # We use a standard button here to lock everything in.
     if st.button("Save New Order & Client Details to Database"):
         if final_site.strip() == "" or final_contact.strip() == "":
             st.error("Please fill in the Site and Contact details!")
@@ -230,7 +229,6 @@ elif menu_selection == "➕ Enter New Order":
             install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
             status = "Locked" if harvest_date else "Pending"
             
-            # This smart function saves the order AND remembers the new site/contact!
             save_new_order(selected_customer, final_site, final_contact, final_phone, variety, m2_area, harvest_str, install_str, status)
             st.success("Order saved! Site and Contact remembered for next time.")
 
@@ -244,7 +242,7 @@ elif menu_selection == "👥 Manage Customers":
     with col2:
         st.subheader("➕ Add New Customer")
         new_name = st.text_input("Enter New Customer Name:")
-        if st.button("Save to Database"):
+        if st.button("Save to Database", key="save_cust"):
             if new_name == "":
                 st.error("Please enter a name first.")
             else:
@@ -257,4 +255,24 @@ elif menu_selection == "👥 Manage Customers":
 
 elif menu_selection == "⚙️ System Settings":
     st.title("⚙️ System Settings")
-    st.info("System settings and lists will go here.")
+    
+    st.subheader("🌱 Manage Turf Varieties")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("Current Varieties:")
+        st.dataframe(pd.DataFrame(varieties, columns=["Variety Name"]), use_container_width=True, hide_index=True)
+        
+    with col2:
+        st.write("➕ Add New Turf Variety")
+        new_variety = st.text_input("Enter New Variety Name:")
+        if st.button("Save Variety"):
+            if new_variety == "":
+                st.error("Please enter a variety name first.")
+            else:
+                try:
+                    run_query("INSERT INTO varieties (name) VALUES (?)", (new_variety.strip(),))
+                    st.success(f"Added {new_variety} to the system!")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("That variety already exists in the system!")
