@@ -15,8 +15,8 @@ menu_selection = st.sidebar.radio("Main Menu:", [
 ])
 st.sidebar.divider()
 
-# --- DATABASE SETUP (Upgraded to v3 for Customers Table) ---
-DB_PATH = Path("turf_orders_v3.db")
+# --- DATABASE SETUP (Upgraded to v5 for Cascading Sites & Contacts) ---
+DB_PATH = Path("turf_orders_v5.db")
 
 def init_database():
     conn = sqlite3.connect(DB_PATH)
@@ -27,6 +27,9 @@ def init_database():
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             customer TEXT NOT NULL,
+            site_address TEXT DEFAULT '',
+            site_contact TEXT DEFAULT '',
+            contact_phone TEXT DEFAULT '',
             variety TEXT NOT NULL,
             m2_area INTEGER NOT NULL,
             harvest_date TEXT DEFAULT '',
@@ -39,81 +42,70 @@ def init_database():
     """)
     
     # 2. Create Customers Table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS customers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL
-        )
-    """)
+    cursor.execute("CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     
-    # Seed initial orders if empty
-    cursor.execute("SELECT COUNT(*) FROM orders")
-    if cursor.fetchone()[0] == 0:
-        initial_orders = [
-            ("EXCELL GRAY", "Kikuyu", 1800, "2026-06-28", "2026-06-29", "Locked", 0, 1800),
-            ("FLEMINGS", "Kikuyu", 1500, "", "", "Pending", 0, 1500)
-        ]
-        cursor.executemany("""
-            INSERT INTO orders (customer, variety, m2_area, harvest_date, install_date, status, amount_installed, remaining_balance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, initial_orders)
-        
-    # Seed initial customers if empty
+    # 3. Create Sites Table
+    cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_name TEXT NOT NULL, site_address TEXT NOT NULL)")
+    
+    # 4. Create Contacts Table
+    cursor.execute("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
+    
+    # Seed initial data to prevent empty errors
     cursor.execute("SELECT COUNT(*) FROM customers")
     if cursor.fetchone()[0] == 0:
-        initial_customers = [("EXCELL GRAY",), ("FLEMINGS",), ("NEDGE",), ("GREEN CONCEPTS",)]
-        cursor.executemany("INSERT INTO customers (name) VALUES (?)", initial_customers)
+        cursor.executemany("INSERT INTO customers (name) VALUES (?)", [("EXCELL GRAY",), ("FLEMINGS",), ("NEDGE",), ("GREEN CONCEPTS",)])
+        
+        # Seed one fake site and contact so you can see how it works!
+        cursor.execute("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", ("EXCELL GRAY", "123 Spring St, Melbourne"))
+        cursor.execute("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", ("123 Spring St, Melbourne", "Dave Foreman", "0412 345 678"))
 
     conn.commit()
     conn.close()
 
 # --- DATABASE HELPER FUNCTIONS ---
-def get_all_orders():
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
-    conn.close()
-    return df
-
-def add_order(customer, variety, m2_area, harvest_date, install_date, status):
+def run_query(query, params=()):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO orders (customer, variety, m2_area, harvest_date, install_date, status, amount_installed, remaining_balance)
-        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-    """, (customer, variety, m2_area, harvest_date, install_date, status, m2_area))
-    order_id = cursor.lastrowid
+    cursor.execute(query, params)
+    result = cursor.fetchall()
     conn.commit()
     conn.close()
-    return order_id
+    return result
 
-def get_customer_names():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM customers ORDER BY name ASC")
-    # Fetch all names and put them in a simple list
-    names = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return names
+def get_customers():
+    return [row[0] for row in run_query("SELECT name FROM customers ORDER BY name ASC")]
 
-def add_new_customer(name):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        # Convert to UPPERCASE to keep data clean
-        cursor.execute("INSERT INTO customers (name) VALUES (?)", (name.strip().upper(),))
-        conn.commit()
-        conn.close()
-        return True
-    except sqlite3.IntegrityError:
-        # This triggers if the name already exists because we set name to UNIQUE
-        return False
+def get_sites_for_customer(customer_name):
+    return [row[0] for row in run_query("SELECT site_address FROM sites WHERE customer_name = ?", (customer_name,))]
+
+def get_contacts_for_site(site_address):
+    # Returns a list of dictionaries with name and phone
+    rows = run_query("SELECT contact_name, phone FROM contacts WHERE site_address = ?", (site_address,))
+    return [{"name": r[0], "phone": r[1]} for r in rows]
+
+def save_new_order(customer, site, contact, phone, variety, m2_area, harvest, install, status):
+    # 1. Save site if it doesn't exist
+    existing_sites = get_sites_for_customer(customer)
+    if site not in existing_sites and site.strip() != "":
+        run_query("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", (customer, site))
+        
+    # 2. Save contact if it doesn't exist
+    if site.strip() != "" and contact.strip() != "":
+        existing_contacts = [c["name"] for c in get_contacts_for_site(site)]
+        if contact not in existing_contacts:
+            run_query("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", (site, contact, phone))
+            
+    # 3. Save the actual order
+    query = """
+        INSERT INTO orders (customer, site_address, site_contact, contact_phone, variety, m2_area, harvest_date, install_date, status, amount_installed, remaining_balance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+    """
+    run_query(query, (customer, site, contact, phone, variety, m2_area, harvest, install, status, m2_area))
 
 # Initialize database on app start
 init_database()
 
 # --- DYNAMIC LISTS ---
-# Customers are now pulled live from the database!
-customers = get_customer_names() 
 pallet_options = [60, 70, 80]
 varieties = ["Kikuyu", "Santa Anna Couch", "Buffalo"]
 
@@ -123,131 +115,145 @@ if menu_selection == "📊 Pipeline Dashboard":
     st.title("🚜 Turf Galore Sched — Ops Dashboard")
     st.subheader("Master Juggling Pipeline")
     
-    df = get_all_orders()
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
+    conn.close()
     
     if df.empty:
         st.info("No orders in the system.")
     else:
         def row_color(row):
-            if row['status'] == 'Installed':
-                return ['background-color: #e2e3e5; color: #6c757d'] * len(row)
-            elif row['harvest_date'] != "" and row['install_date'] != "":
-                return ['background-color: #d4edda; color: black'] * len(row)
+            if row['status'] == 'Installed': return ['background-color: #e2e3e5; color: #6c757d'] * len(row)
+            elif row['harvest_date'] != "" and row['install_date'] != "": return ['background-color: #d4edda; color: black'] * len(row)
             return ['background-color: #fff3cd; color: black'] * len(row)
             
         styled_df = df.style.apply(row_color, axis=1)
         
         selection_event = st.dataframe(
             styled_df, 
-            use_container_width=True, 
-            hide_index=True, 
-            on_select="rerun", 
-            selection_mode="single-row",
+            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
             column_config={
-                "id": "ID",
-                "customer": "Customer",
-                "variety": "Turf Variety",
-                "m2_area": "Total M2",
-                "harvest_date": "Harvest",
-                "install_date": "Install",
-                "status": "Status",
-                "amount_installed": "Installed M2",
-                "remaining_balance": "Remaining M2",
-                "created_at": None
+                "id": "ID", "customer": "Customer", "site_address": "Site", "site_contact": "Contact", 
+                "contact_phone": "Phone", "variety": "Variety", "m2_area": "Total M2",
+                "harvest_date": "Harvest", "install_date": "Install", "status": "Status",
+                "amount_installed": "Installed M2", "remaining_balance": "Remaining M2", "created_at": None
             }
         )
-        
         st.divider()
-        selected_row = selection_event.selection.rows
         
+        # Edit section below table
+        selected_row = selection_event.selection.rows
         if selected_row:
             selected_data = df.iloc[selected_row[0]]
             order_id = int(selected_data['id'])
+            st.subheader(f"📝 Edit Order #{order_id}")
             
-            st.subheader(f"📝 Edit Order #{order_id} - {selected_data['customer']}")
-            st.write(f"**Total Area Ordered:** {selected_data['m2_area']} M2")
-            
+            new_address = st.text_input("Job Site Address", value=selected_data['site_address'])
             col1, col2 = st.columns(2)
             with col1:
+                new_contact = st.text_input("Site Contact", value=selected_data['site_contact'])
                 current_installed = int(selected_data['amount_installed'])
-                new_installed = st.number_input("Total Amount Installed (M2)", min_value=0, value=current_installed, step=10)
-            
+                new_installed = st.number_input("Total Installed (M2)", min_value=0, value=current_installed, step=10)
             with col2:
+                new_phone = st.text_input("Phone Number", value=selected_data['contact_phone'])
                 auto_remaining = int(selected_data['m2_area']) - new_installed
-                new_remaining = st.number_input("Remaining Balance (M2) - Manual Override", value=auto_remaining, step=1)
+                new_remaining = st.number_input("Remaining Balance (M2)", value=auto_remaining, step=1)
             
             status_options = ["Pending", "Locked", "Harvested", "Installed", "Cancelled"]
-            current_status = selected_data['status']
-            if current_status not in status_options:
-                current_status = "Pending"
-            
+            current_status = selected_data['status'] if selected_data['status'] in status_options else "Pending"
             new_status = st.selectbox("Update Status", status_options, index=status_options.index(current_status))
 
             if st.button("Save Order Updates"):
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE orders 
-                    SET amount_installed = ?, remaining_balance = ?, status = ?
-                    WHERE id = ?
-                """, (new_installed, new_remaining, new_status, order_id))
-                conn.commit()
-                conn.close()
-                st.success("Order updated successfully!")
+                run_query("""
+                    UPDATE orders SET site_address=?, site_contact=?, contact_phone=?, amount_installed=?, remaining_balance=?, status=? WHERE id=?
+                """, (new_address, new_contact, new_phone, new_installed, new_remaining, new_status, order_id))
+                st.success("Order updated!")
                 st.rerun()
-        else:
-            st.info("👆 Click on any order row in the table above to view and edit its details.")
 
 elif menu_selection == "➕ Enter New Order":
     st.title("➕ Queue New Order")
-    with st.form("new_order_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_customer = st.selectbox("Customer Name", customers)
-            variety = st.selectbox("Turf Variety", varieties)
-            m2_area = st.number_input("Total M2 Area Required", min_value=0, step=10, value=0)
-            selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options)
-        with col2:
-            tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=True)
-            if not tba_dates:
-                harvest_date = st.date_input("Confirmed Harvest Date")
-                install_date = st.date_input("Confirmed Install Date")
-            else:
-                harvest_date = None
-                install_date = None
+    
+    # NO MORE FORM! The page updates instantly as you click.
+    customers = get_customers()
+    selected_customer = st.selectbox("1. Select Customer", customers)
+    
+    # Cascading Logic for Sites
+    existing_sites = get_sites_for_customer(selected_customer)
+    site_options = existing_sites + ["➕ Add New Site Address..."]
+    selected_site = st.selectbox("2. Select Job Site", site_options)
+    
+    if selected_site == "➕ Add New Site Address...":
+        final_site = st.text_input("Type the New Site Address:")
+    else:
+        final_site = selected_site
+        
+    # Cascading Logic for Contacts
+    if final_site and final_site.strip() != "":
+        existing_contacts = get_contacts_for_site(final_site)
+        contact_names = [c["name"] for c in existing_contacts]
+        contact_options = contact_names + ["➕ Add New Contact..."]
+        selected_contact = st.selectbox("3. Select Site Contact", contact_options)
+        
+        if selected_contact == "➕ Add New Contact...":
+            final_contact = st.text_input("Type the New Contact's Name:")
+            final_phone = st.text_input("Type the New Contact's Phone:")
+        else:
+            final_contact = selected_contact
+            # Find the phone number for the picked contact
+            matching_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "")
+            final_phone = st.text_input("Contact's Phone", value=matching_phone, disabled=True)
+    else:
+        final_contact = ""
+        final_phone = ""
+        
+    st.divider()
+    st.subheader("Turf Details")
+    col1, col2 = st.columns(2)
+    with col1:
+        variety = st.selectbox("Turf Variety", varieties)
+        m2_area = st.number_input("Total M2 Area Required", min_value=0, step=10, value=0)
+    with col2:
+        tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=True)
+        if not tba_dates:
+            harvest_date = st.date_input("Confirmed Harvest Date")
+            install_date = st.date_input("Confirmed Install Date")
+        else:
+            harvest_date = None
+            install_date = None
 
-        if st.form_submit_button("Add to Schedule"):
+    # We use a standard button here to lock everything in.
+    if st.button("Save New Order & Client Details to Database"):
+        if final_site.strip() == "" or final_contact.strip() == "":
+            st.error("Please fill in the Site and Contact details!")
+        else:
             harvest_str = harvest_date.strftime("%Y-%m-%d") if harvest_date else ""
             install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
             status = "Locked" if harvest_date else "Pending"
             
-            order_id = add_order(selected_customer, variety, m2_area, harvest_str, install_str, status)
-            st.success(f"Added Order #{order_id} successfully!")
+            # This smart function saves the order AND remembers the new site/contact!
+            save_new_order(selected_customer, final_site, final_contact, final_phone, variety, m2_area, harvest_str, install_str, status)
+            st.success("Order saved! Site and Contact remembered for next time.")
 
 elif menu_selection == "👥 Manage Customers":
     st.title("👥 Manage Customers")
-    
+    customers = get_customers()
     col1, col2 = st.columns(2)
-    
     with col1:
         st.subheader("Current Customer List")
-        # Display the list of customers neatly
         st.dataframe(pd.DataFrame(customers, columns=["Customer Name"]), use_container_width=True, hide_index=True)
-        
     with col2:
         st.subheader("➕ Add New Customer")
-        with st.form("add_customer_form"):
-            new_name = st.text_input("Enter New Customer Name:")
-            if st.form_submit_button("Save to Database"):
-                if new_name == "":
-                    st.error("Please enter a name first.")
-                else:
-                    success = add_new_customer(new_name)
-                    if success:
-                        st.success(f"Added {new_name.upper()} to the system!")
-                        st.rerun()
-                    else:
-                        st.error("That customer already exists in the system!")
+        new_name = st.text_input("Enter New Customer Name:")
+        if st.button("Save to Database"):
+            if new_name == "":
+                st.error("Please enter a name first.")
+            else:
+                try:
+                    run_query("INSERT INTO customers (name) VALUES (?)", (new_name.strip().upper(),))
+                    st.success(f"Added {new_name.upper()}!")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("That customer already exists!")
 
 elif menu_selection == "⚙️ System Settings":
     st.title("⚙️ System Settings")
