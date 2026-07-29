@@ -28,7 +28,7 @@ else:
 menu_selection = st.sidebar.radio("Main Menu:", menu_options)
 st.sidebar.divider()
 
-# --- DATABASE SETUP (v10 - Added Services, Transport, & PO) ---
+# --- DATABASE SETUP ---
 DB_PATH = Path("turf_orders_v10.db")
 
 def init_database():
@@ -75,7 +75,6 @@ def init_database():
         cursor.execute("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", ("123 Spring St, Melbourne", "Dave Foreman", "0412 345 678"))
         cursor.executemany("INSERT INTO varieties (name) VALUES (?)", [("Kikuyu",), ("Santa Anna Couch",), ("Buffalo",)])
         cursor.executemany("INSERT INTO pallet_sizes (size) VALUES (?)", [(60,), (70,), (80,)])
-        # Seed initial transport options
         cursor.executemany("INSERT INTO transport_options (name) VALUES (?)", [("Fleet Truck #1",), ("Fleet Truck #2",), ("Subbie - John Doe Transport",), ("TBA",)])
 
     conn.commit()
@@ -175,7 +174,6 @@ if menu_selection == "📊 Pipeline Dashboard":
             order_id = int(selected_data['id'])
             st.subheader(f"📝 Order #{order_id} Details")
             
-            # Show notes to everyone!
             if selected_data['special_instructions'] != "":
                 st.info(f"**Special Instructions:** {selected_data['special_instructions']}")
             
@@ -378,16 +376,24 @@ elif menu_selection == "👥 Manage Customers":
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("That customer already exists!")
+        
+        st.divider()
+        with st.expander("🗑️ Delete a Customer"):
+            del_cust = st.selectbox("Select Customer to Remove:", customers)
+            if st.button("Delete Customer"):
+                run_query("DELETE FROM customers WHERE name = ?", (del_cust,))
+                st.success(f"Deleted {del_cust}")
+                st.rerun()
 
 elif menu_selection == "⚙️ System Settings":
     st.title("⚙️ System Settings")
     
-    # Created 3 columns now so everything fits beautifully!
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.subheader("🌱 Turf Varieties")
         st.dataframe(pd.DataFrame(varieties, columns=["Variety Name"]), use_container_width=True, hide_index=True)
+        
         new_variety = st.text_input("Add Turf Variety:")
         if st.button("Save Variety"):
             if new_variety != "":
@@ -398,9 +404,16 @@ elif menu_selection == "⚙️ System Settings":
                 except sqlite3.IntegrityError:
                     st.error("Variety exists!")
                     
+        with st.expander("🗑️ Delete Variety"):
+            del_var = st.selectbox("Select to delete:", varieties, key="del_var_sel")
+            if st.button("Delete", key="del_var_btn"):
+                run_query("DELETE FROM varieties WHERE name = ?", (del_var,))
+                st.rerun()
+                    
     with col2:
         st.subheader("🪵 Pallet Sizes")
         st.dataframe(pd.DataFrame(pallet_options, columns=["Pallet Size (M2)"]), use_container_width=True, hide_index=True)
+        
         new_pallet = st.number_input("Add Pallet Size:", min_value=1, step=1, value=50)
         if st.button("Save Pallet Size"):
             try:
@@ -410,9 +423,16 @@ elif menu_selection == "⚙️ System Settings":
             except sqlite3.IntegrityError:
                 st.error("Size exists!")
                 
+        with st.expander("🗑️ Delete Pallet Size"):
+            del_pal = st.selectbox("Select to delete:", pallet_options, key="del_pal_sel")
+            if st.button("Delete", key="del_pal_btn"):
+                run_query("DELETE FROM pallet_sizes WHERE size = ?", (int(del_pal),))
+                st.rerun()
+                
     with col3:
         st.subheader("🚚 Transport Options")
         st.dataframe(pd.DataFrame(transport_list, columns=["Fleet / Subbie Name"]), use_container_width=True, hide_index=True)
+        
         new_transport = st.text_input("Add Fleet # or Subcontractor:")
         if st.button("Save Transport"):
             if new_transport != "":
@@ -422,3 +442,9 @@ elif menu_selection == "⚙️ System Settings":
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("Transport exists!")
+
+        with st.expander("🗑️ Delete Transport"):
+            del_trans = st.selectbox("Select to delete:", transport_list, key="del_trans_sel")
+            if st.button("Delete", key="del_trans_btn"):
+                run_query("DELETE FROM transport_options WHERE name = ?", (del_trans,))
+                st.rerun()
