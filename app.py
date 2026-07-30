@@ -14,9 +14,13 @@ st.set_page_config(page_title="TG Schedule", page_icon=LOGO_URL, layout="wide")
 # --- CUSTOM CSS FOR SIDEBAR & LAYOUT ---
 st.markdown("""
     <style>
-        [data-testid="stSidebar"] {
-            min-width: 220px !important;
-            max-width: 220px !important;
+        /* Force the sidebar to be slimmer ONLY on desktop screens. */
+        /* On phones (under 768px), let Streamlit auto-collapse it into a slide-out menu! */
+        @media (min-width: 768px) {
+            [data-testid="stSidebar"] {
+                min-width: 220px !important;
+                max-width: 220px !important;
+            }
         }
     </style>
 """, unsafe_allow_html=True)
