@@ -9,14 +9,15 @@ import streamlit.components.v1 as components
 # --- BRANDING ---
 LOGO_URL = "https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w"
 
-st.set_page_config(page_title="TG Schedule", page_icon=LOGO_URL, layout="wide")
+# Added initial_sidebar_state="collapsed" to force the mobile slide-out menu!
+st.set_page_config(page_title="TG Schedule", page_icon=LOGO_URL, layout="wide", initial_sidebar_state="collapsed")
 
 # --- CUSTOM CSS FOR SIDEBAR & LAYOUT ---
 st.markdown("""
     <style>
-        /* Force the sidebar to be slimmer ONLY on desktop screens. */
-        /* On phones (under 768px), let Streamlit auto-collapse it into a slide-out menu! */
-        @media (min-width: 768px) {
+        /* Force the sidebar to be slimmer ONLY on true desktop screens (1024px+). */
+        /* On phones and tablets, let Streamlit auto-collapse it into a slide-out menu! */
+        @media (min-width: 1024px) {
             [data-testid="stSidebar"] {
                 min-width: 220px !important;
                 max-width: 220px !important;
