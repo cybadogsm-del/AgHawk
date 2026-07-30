@@ -10,7 +10,6 @@ st.set_page_config(page_title="Turf Galore Sched", layout="wide")
 # --- CUSTOM CSS FOR SIDEBAR & LAYOUT ---
 st.markdown("""
     <style>
-        /* Force the sidebar to be slimmer to give the dashboard more room */
         [data-testid="stSidebar"] {
             min-width: 220px !important;
             max-width: 220px !important;
@@ -39,38 +38,12 @@ if "last_menu" not in st.session_state:
     st.session_state.last_menu = None
 if "run_date" not in st.session_state:
     st.session_state.run_date = datetime.date.today()
-
-# --- SIDEBAR LOGO ---
-st.sidebar.image("https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w", use_container_width=True)
-st.sidebar.divider()
-
-# --- ROLE SIMULATOR ---
-st.sidebar.title("🔐 Access Level")
-user_role = st.sidebar.selectbox("Simulate User Role:", [
-    "👑 Ops Manager/Admin", 
-    "🚜 Farm Staff", 
-    "👷 Site Supervisors", 
-    "🚚 Linehaul Drivers",
-    "🛠️ Installers"
-])
-st.sidebar.divider()
-
-# --- DYNAMIC MAIN MENU ---
-st.sidebar.title("Navigation")
-if user_role == "👑 Ops Manager/Admin":
-    menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet", "➕ Enter New Order", "👥 Manage Customers", "⚙️ System Settings"]
-else: 
-    menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet"]
-
-menu_selection = st.sidebar.radio("Main Menu:", menu_options)
-st.sidebar.divider()
-
-# Reset drill-down & trigger scroll if they click a different menu tab
-if st.session_state.last_menu != menu_selection:
-    st.session_state.editing_order = None
-    st.session_state.last_menu = menu_selection
-    st.session_state.scroll_to_top = True
-    st.rerun()
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+if "user_role" not in st.session_state:
+    st.session_state.user_role = None
 
 # --- DATABASE SETUP ---
 DB_PATH = Path("turf_orders_v11.db")
@@ -79,6 +52,7 @@ def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    # Core tables
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,6 +88,7 @@ def init_database():
     if 'parking_pin' not in columns:
         cursor.execute("ALTER TABLE orders ADD COLUMN parking_pin TEXT DEFAULT ''")
     
+    # Config tables
     cursor.execute("CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_name TEXT NOT NULL, site_address TEXT NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
@@ -122,6 +97,17 @@ def init_database():
     cursor.execute("CREATE TABLE IF NOT EXISTS transport_options (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     
+    # User Auth table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            pin TEXT NOT NULL,
+            role TEXT NOT NULL
+        )
+    """)
+    
+    # Populate defaults if empty
     cursor.execute("SELECT COUNT(*) FROM customers")
     if cursor.fetchone()[0] == 0:
         cursor.executemany("INSERT INTO customers (name) VALUES (?)", [("EXCELL GRAY",), ("FLEMINGS",), ("NEDGE",), ("GREEN CONCEPTS",)])
@@ -131,6 +117,11 @@ def init_database():
         cursor.executemany("INSERT INTO pallet_sizes (size) VALUES (?)", [(60,), (70,), (80,)])
         cursor.executemany("INSERT INTO transport_options (name) VALUES (?)", [("Fleet Truck #1",), ("Fleet Truck #2",), ("Subbie - John Doe Transport",), ("TBA",)])
         cursor.executemany("INSERT INTO teams (name) VALUES (?)", [("Install Team Alpha",), ("Install Team Bravo",), ("TBA",)])
+    
+    # Default Admin User
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO users (username, pin, role) VALUES (?, ?, ?)", ("admin", "1234", "👑 Ops Manager/Admin"))
 
     conn.commit()
     conn.close()
@@ -174,12 +165,79 @@ def save_new_order(customer, po, site, contact, phone, special, service, transpo
 # Initialize database on app start
 init_database()
 
+# =====================================================================
+# LOGIN SCREEN ENFORCEMENT
+# =====================================================================
+if not st.session_state.logged_in:
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.5, 1])
+    
+    with col2:
+        st.image("https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w", use_container_width=True)
+        st.markdown("<h3 style='text-align: center;'>Schedule & Dispatch Login</h3>", unsafe_allow_html=True)
+        
+        with st.form("login_form"):
+            username = st.text_input("Username").strip().lower()
+            pin = st.text_input("PIN (Password)", type="password").strip()
+            submitted = st.form_submit_button("Log In", use_container_width=True)
+            
+            if submitted:
+                # Query DB to check credentials
+                user_record = run_query("SELECT username, role FROM users WHERE LOWER(username)=? AND pin=?", (username, pin))
+                if user_record:
+                    st.session_state.logged_in = True
+                    st.session_state.current_user = user_record[0][0].capitalize()
+                    st.session_state.user_role = user_record[0][1]
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid Username or PIN")
+        
+        st.info("💡 **First time?** Try Username: `admin` | PIN: `1234`")
+    
+    # STOP EXECUTION HERE IF NOT LOGGED IN
+    st.stop()
+
+
+# =====================================================================
+# MAIN APP (Only runs if logged in)
+# =====================================================================
+
 # --- DYNAMIC LISTS ---
 pallet_options = get_pallet_sizes()
 varieties = get_varieties()
 transport_list = get_transport_options()
 teams_list = get_teams()
 service_options = ["Supply Only", "Supply & Deliver", "Supply & Install"]
+role_options = ["👑 Ops Manager/Admin", "🚜 Farm Staff", "👷 Site Supervisors", "🚚 Linehaul Drivers", "🛠️ Installers"]
+
+# --- SIDEBAR LOGO & USER PROFILE ---
+st.sidebar.image("https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w", use_container_width=True)
+st.sidebar.success(f"👤 **{st.session_state.current_user}**\n\n{st.session_state.user_role}")
+if st.sidebar.button("🚪 Log Out", use_container_width=True):
+    st.session_state.logged_in = False
+    st.session_state.current_user = None
+    st.session_state.user_role = None
+    st.rerun()
+st.sidebar.divider()
+
+user_role = st.session_state.user_role
+
+# --- DYNAMIC MAIN MENU ---
+st.sidebar.title("Navigation")
+if user_role == "👑 Ops Manager/Admin":
+    menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet", "➕ Enter New Order", "👥 Manage Customers", "⚙️ System Settings", "👤 Manage Users"]
+else: 
+    menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet"]
+
+menu_selection = st.sidebar.radio("Main Menu:", menu_options)
+st.sidebar.divider()
+
+# Reset drill-down & trigger scroll if they click a different menu tab
+if st.session_state.last_menu != menu_selection:
+    st.session_state.editing_order = None
+    st.session_state.last_menu = menu_selection
+    st.session_state.scroll_to_top = True
+    st.rerun()
 
 # =====================================================================
 # GLOBAL DRILL-DOWN OVERLAY
@@ -426,7 +484,6 @@ elif menu_selection == "📋 Daily Run Sheet":
             st.session_state.run_date += datetime.timedelta(days=1)
             st.rerun()
     with col4:
-        # The date input has a calendar icon and you can click the box to open it
         selected_date = st.date_input("🗓️ Calendar Pop-Up (Click to open)", value=st.session_state.run_date, format="DD/MM/YYYY")
         if selected_date != st.session_state.run_date:
             st.session_state.run_date = selected_date
@@ -475,7 +532,6 @@ elif menu_selection == "➕ Enter New Order":
     
     tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=False)
     
-    # --- ROW 1: Dates & Customer ---
     r1_col1, r1_col2 = st.columns(2)
     with r1_col1:
         if not tba_dates:
@@ -490,21 +546,18 @@ elif menu_selection == "➕ Enter New Order":
         customers = get_customers()
         selected_customer = st.selectbox("3. Select Customer", customers, index=None, placeholder="Choose a Customer...")
 
-    # --- ROW 2: Service & Variety ---
     r2_col1, r2_col2 = st.columns(2)
     with r2_col1:
         selected_service = st.selectbox("4. Service Required", service_options, index=None, placeholder="Select Service...")
     with r2_col2:
         variety = st.selectbox("5. Turf Variety", varieties, index=None, placeholder="Select Variety...")
 
-    # --- ROW 3: Qty & Team Assigned ---
     r3_col1, r3_col2 = st.columns(2)
     with r3_col1:
         m2_area = st.number_input("6. Total Qty Required (M2)", min_value=10, step=10, value=None, placeholder="Enter total area...")
     with r3_col2:
         selected_team = st.selectbox("7. Team Assigned (Optional)", teams_list, index=None, placeholder="Leave blank if unknown...")
 
-    # --- ROW 4: Transport & Job Site ---
     r4_col1, r4_col2 = st.columns(2)
     with r4_col1:
         selected_transport = st.selectbox("8. Transport / Fleet (Optional)", transport_list, index=None, placeholder="Leave blank if unknown...")
@@ -519,7 +572,6 @@ elif menu_selection == "➕ Enter New Order":
         else:
             final_site = selected_site_option if selected_site_option else ""
 
-    # --- ROW 5: Site Contact & Parking Pin ---
     r5_col1, r5_col2 = st.columns(2)
     with r5_col1:
         if final_site and final_site != "➕ Add New Site Address":
@@ -547,7 +599,6 @@ elif menu_selection == "➕ Enter New Order":
         po_number = st.text_input("11. Customer PO (Optional)", placeholder="e.g. PO-99214")
         parking_pin = st.text_input("📍 B-Double Parking Pin Link (Optional)", placeholder="Paste Google Maps link here...")
 
-    # --- Extra Fields ---
     st.divider()
     r6_col1, r6_col2 = st.columns(2)
     with r6_col1:
@@ -694,3 +745,46 @@ elif menu_selection == "⚙️ System Settings":
             if st.button("Delete", key="del_team_btn"):
                 run_query("DELETE FROM teams WHERE name = ?", (del_team,))
                 st.rerun()
+
+elif menu_selection == "👤 Manage Users":
+    st.title("👤 Manage Users")
+    
+    conn = sqlite3.connect(DB_PATH)
+    users_df = pd.read_sql_query("SELECT id, username, role FROM users", conn)
+    conn.close()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Current Users")
+        st.dataframe(users_df, use_container_width=True, hide_index=True, column_config={"id": None, "username": "Username", "role": "Assigned Role"})
+        
+    with col2:
+        st.subheader("➕ Add New User")
+        with st.form("new_user_form"):
+            new_user = st.text_input("Username (e.g. matt, jason, driver1)").strip().lower()
+            new_pin = st.text_input("Assign 4-Digit PIN", type="password").strip()
+            new_role = st.selectbox("Assign Role", role_options)
+            
+            if st.form_submit_button("Save New User"):
+                if new_user == "" or new_pin == "":
+                    st.error("Please fill out all fields.")
+                else:
+                    try:
+                        run_query("INSERT INTO users (username, pin, role) VALUES (?, ?, ?)", (new_user, new_pin, new_role))
+                        st.success(f"User '{new_user}' created successfully!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("That username already exists!")
+                        
+        st.divider()
+        with st.expander("🗑️ Delete User"):
+            # Don't let the admin delete themselves by accident
+            delete_candidates = users_df[users_df['username'] != st.session_state.current_user.lower()]['username'].tolist()
+            if not delete_candidates:
+                st.info("No other users to delete.")
+            else:
+                user_to_delete = st.selectbox("Select user to remove:", delete_candidates)
+                if st.button("Delete User", type="primary"):
+                    run_query("DELETE FROM users WHERE username = ?", (user_to_delete,))
+                    st.success(f"Deleted user '{user_to_delete}'")
+                    st.rerun()
