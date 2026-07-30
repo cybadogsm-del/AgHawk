@@ -27,6 +27,10 @@ if "editing_order" not in st.session_state:
 if "last_menu" not in st.session_state:
     st.session_state.last_menu = None
 
+# --- SIDEBAR LOGO ---
+st.sidebar.image("https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w", use_container_width=True)
+st.sidebar.divider()
+
 # --- ROLE SIMULATOR ---
 st.sidebar.title("🔐 Access Level")
 user_role = st.sidebar.selectbox("Simulate User Role:", [
@@ -207,7 +211,6 @@ if st.session_state.editing_order is not None:
                 
             raw_pin = selected_data.get('parking_pin', '')
             if raw_pin and raw_pin.strip() != "":
-                # If they pasted a URL, make it clickable. If just text, show it.
                 if raw_pin.startswith("http"):
                     pin_display = f"[📍 Open Map Link]({raw_pin})"
                 else:
