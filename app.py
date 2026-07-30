@@ -244,12 +244,10 @@ if user_role == "👑 Ops Manager/Admin":
 else: 
     menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet"]
 
-# If the Home button was clicked, we force the menu radio button to match
 index_selection = menu_options.index(st.session_state.last_menu) if st.session_state.last_menu in menu_options else 0
 menu_selection = st.sidebar.radio("Main Menu:", menu_options, index=index_selection)
 st.sidebar.divider()
 
-# Reset drill-down & trigger scroll if they click a different menu tab naturally
 if st.session_state.last_menu != menu_selection:
     st.session_state.editing_order = None
     st.session_state.last_menu = menu_selection
@@ -420,56 +418,14 @@ if st.session_state.editing_order is not None:
 elif menu_selection == "📊 Pipeline Dashboard":
     st.title("🚜 Ops Dashboard")
     
-    # --- 7-DAY CAPACITY FORECAST ---
-    st.subheader("🚛 7-Day Fleet Capacity Forecast (Farm Dispatch)")
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
-    
-    conn = sqlite3.connect(DB_PATH)
-    cap_df = pd.read_sql_query(f"""
-        SELECT harvest_date, SUM(full_pallets) as tot_full, SUM(CASE WHEN loose_rolls > 0 THEN 1 ELSE 0 END) as tot_loose 
-        FROM orders 
-        WHERE status NOT IN ('Installed', 'Cancelled') 
-          AND harvest_date >= '{today_str}' 
-          AND harvest_date != ''
-        GROUP BY harvest_date
-        ORDER BY harvest_date ASC
-        LIMIT 7
-    """, conn)
-    
-    if cap_df.empty:
-        st.info("No active harvests scheduled for the upcoming 7 days.")
-    else:
-        # Dynamically create columns based on how many active days we found
-        cap_cols = st.columns(len(cap_df))
-        for idx, row in cap_df.iterrows():
-            date_obj = datetime.datetime.strptime(row['harvest_date'], "%Y-%m-%d")
-            display_date = date_obj.strftime("%d/%m")
-            day_name = date_obj.strftime("%a")
-            
-            # Math: Total Full Pallets + 1 extra pallet space if there are loose rolls on the order
-            tot_pallets = int(row['tot_full'] or 0) + int(row['tot_loose'] or 0)
-            avail = 60 - tot_pallets
-            
-            with cap_cols[idx]:
-                with st.container(border=True):
-                    st.markdown(f"**{day_name} {display_date}**")
-                    if tot_pallets <= 60:
-                        st.markdown(f"📦 {tot_pallets}/60 Used")
-                        st.success(f"{avail} Plt Avail")
-                    else:
-                        st.markdown(f"📦 **{tot_pallets}/60 Used**")
-                        st.error(f"⚠️ {abs(avail)} OVER CAP")
-                        st.caption("Subbie Req.")
-
-    st.write("---")
-    
-    # --- PIPELINE TABLE ---
     col_filter, _ = st.columns([1, 3])
     with col_filter:
         view_mode = st.selectbox("View Filter:", ["Active Pipeline (Pending/Locked/Harvested)", "Completed & Cancelled", "Show All Orders"])
     
+    conn = sqlite3.connect(DB_PATH)
     if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
-        df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY created_at DESC", conn)
+        # Sort so days group correctly. Empty strings (TBA) will sort first if we aren't careful, so we handle it below.
+        df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY harvest_date ASC, created_at DESC", conn)
     elif view_mode == "Completed & Cancelled":
         df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Installed', 'Cancelled') ORDER BY created_at DESC", conn)
     else:
@@ -479,51 +435,92 @@ elif menu_selection == "📊 Pipeline Dashboard":
     if df.empty:
         st.info("No orders found for this view.")
     else:
-        df['harvest_date'] = df['harvest_date'].apply(format_aus_date)
-        df['install_date'] = df['install_date'].apply(format_aus_date)
-        
         def row_color(row):
             if row['status'] in ['Installed', 'Cancelled']: return ['background-color: #e2e3e5; color: #6c757d'] * len(row)
             elif row['harvest_date'] != "" and row['install_date'] != "": return ['background-color: #d4edda; color: black'] * len(row)
             return ['background-color: #fff3cd; color: black'] * len(row)
             
-        styled_df = df.style.apply(row_color, axis=1)
-        
-        st.markdown("💡 **Click any row to drill down into the order details.**")
-        
-        selection_event = st.dataframe(
-            styled_df, 
-            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
-            column_config={
-                "id": None, 
-                "customer": "Customer", 
-                "purchase_order": None, 
-                "site_address": "Site", 
-                "site_contact": None, 
-                "contact_phone": None, 
-                "special_instructions": None, 
-                "service_type": None, 
-                "transport_detail": None, 
-                "team_assigned": "Team",
-                "parking_pin": None,
-                "variety": "Turf", 
-                "m2_area": "M2",  
-                "pallet_size": None, "full_pallets": None, "loose_rolls": None,
-                "harvest_date": "Harvest Date", 
-                "install_date": "Install Date", 
-                "status": "Status",
-                "amount_harvested": "Harv", 
-                "amount_installed": "Inst", 
-                "remaining_balance": "Bal", 
-                "created_at": None
-            }
-        )
-        
-        if selection_event.selection.rows:
-            selected_row = selection_event.selection.rows[0]
-            st.session_state.editing_order = int(df.iloc[selected_row]['id'])
-            st.session_state.scroll_to_top = True
-            st.rerun()
+        col_config = {
+            "id": None, "customer": "Customer", "purchase_order": None, "site_address": "Site", 
+            "site_contact": None, "contact_phone": None, "special_instructions": None, 
+            "service_type": None, "transport_detail": None, "team_assigned": "Team",
+            "parking_pin": None, "variety": "Turf", "m2_area": "M2",  
+            "pallet_size": None, "full_pallets": None, "loose_rolls": None,
+            "harvest_date": "Harvest Date", "install_date": "Install Date", "status": "Status",
+            "amount_harvested": "Harv", "amount_installed": "Inst", "remaining_balance": "Bal", "created_at": None
+        }
+
+        if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
+            st.markdown("💡 **Click any row to drill down into the order details.**")
+            
+            # Grouping Logic for Pipeline
+            df['sort_date'] = df['harvest_date'].replace("", "9999-99-99") 
+            df = df.sort_values(by=['sort_date', 'created_at'], ascending=[True, False])
+            unique_dates = df['harvest_date'].unique()
+            
+            for d_idx, h_date in enumerate(unique_dates):
+                date_df = df[df['harvest_date'] == h_date].copy()
+                
+                if h_date == "":
+                    st.subheader("⏳ Pending / TBA (No Harvest Date Assigned)")
+                else:
+                    st.subheader(f"📅 Harvest Date: {format_aus_date(h_date)}")
+                
+                # Format dates for display
+                date_df['harvest_date_str'] = date_df['harvest_date'].apply(format_aus_date)
+                date_df['install_date_str'] = date_df['install_date'].apply(format_aus_date)
+                
+                display_df = date_df.drop(columns=['sort_date']).copy()
+                display_df['harvest_date'] = display_df['harvest_date_str']
+                display_df['install_date'] = display_df['install_date_str']
+                display_df = display_df.drop(columns=['harvest_date_str', 'install_date_str'])
+                
+                styled_df = display_df.style.apply(row_color, axis=1)
+                
+                sel_event = st.dataframe(
+                    styled_df, use_container_width=True, hide_index=True, 
+                    on_select="rerun", selection_mode="single-row", 
+                    column_config=col_config, key=f"pipe_df_{d_idx}"
+                )
+                
+                if sel_event.selection.rows:
+                    selected_row = sel_event.selection.rows[0]
+                    st.session_state.editing_order = int(date_df.iloc[selected_row]['id'])
+                    st.session_state.scroll_to_top = True
+                    st.rerun()
+                    
+                # --- NEW CAPACITY SUMMARY LINE ---
+                if h_date != "":
+                    tot_full = date_df['full_pallets'].sum()
+                    tot_loose = (date_df['loose_rolls'] > 0).sum()
+                    tot_pallets = int(tot_full + tot_loose)
+                    
+                    if tot_pallets < 60:
+                        st.success(f"🟢 **Capacity Available:** {tot_pallets} / 60 Pallets Used ({60 - tot_pallets} Available on Fleet)")
+                    elif tot_pallets == 60:
+                        st.warning(f"🟠 **Capacity Full:** 60 / 60 Pallets Used (Fleet at maximum)")
+                    else:
+                        st.error(f"🔴 **Over Capacity:** {tot_pallets} / 60 Pallets Used (Subcontractor req. for {tot_pallets - 60} pallets)")
+                
+                st.divider()
+                
+        else:
+            # Standard flat table for Completed/Cancelled & All Orders
+            df['harvest_date'] = df['harvest_date'].apply(format_aus_date)
+            df['install_date'] = df['install_date'].apply(format_aus_date)
+            styled_df = df.style.apply(row_color, axis=1)
+            
+            st.markdown("💡 **Click any row to drill down into the order details.**")
+            selection_event = st.dataframe(
+                styled_df, use_container_width=True, hide_index=True, 
+                on_select="rerun", selection_mode="single-row", column_config=col_config
+            )
+            
+            if selection_event.selection.rows:
+                selected_row = selection_event.selection.rows[0]
+                st.session_state.editing_order = int(df.iloc[selected_row]['id'])
+                st.session_state.scroll_to_top = True
+                st.rerun()
 
 elif menu_selection == "📋 Daily Run Sheet":
     st.title("📋 Daily Run Sheet")
@@ -561,11 +558,13 @@ elif menu_selection == "📋 Daily Run Sheet":
     installs = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     conn.close()
     
-    # --- DISPLAY CAPACITY WARNING ON RUN SHEET ---
-    if run_tot_pallets <= 60:
-        st.success(f"🚛 **Fleet Dispatch Capacity for {st.session_state.run_date.strftime('%d/%m')}:** {run_tot_pallets} / 60 Pallets Used ({60 - run_tot_pallets} Available)")
+    # --- CONSISTENT CAPACITY WARNING ON RUN SHEET ---
+    if run_tot_pallets < 60:
+        st.success(f"🟢 **Fleet Capacity ({st.session_state.run_date.strftime('%d/%m')}):** {run_tot_pallets} / 60 Pallets Used ({60 - run_tot_pallets} Available)")
+    elif run_tot_pallets == 60:
+        st.warning(f"🟠 **Fleet Capacity ({st.session_state.run_date.strftime('%d/%m')}):** 60 / 60 Pallets Used (Capacity Full)")
     else:
-        st.error(f"🚨 **FLEET OVER CAPACITY FOR {st.session_state.run_date.strftime('%d/%m')}:** {run_tot_pallets} / 60 Pallets Used. **Subcontractor required for {run_tot_pallets - 60} pallets.**")
+        st.error(f"🔴 **FLEET OVER CAPACITY ({st.session_state.run_date.strftime('%d/%m')}):** {run_tot_pallets} / 60 Pallets Used. **Subcontractor required for {run_tot_pallets - 60} pallets.**")
     
     clean_columns = {
         "id": None, 
