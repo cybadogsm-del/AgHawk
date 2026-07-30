@@ -94,7 +94,6 @@ def init_database():
         )
     """)
     
-    # Safe migrations
     cursor.execute("PRAGMA table_info(orders)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'team_assigned' not in columns:
@@ -361,6 +360,7 @@ elif menu_selection == "📊 Pipeline Dashboard":
         
         st.markdown("💡 **Click any row to drill down into the order details.**")
         
+        # Explicit width definitions for the dates so they can't be squished
         selection_event = st.dataframe(
             styled_df, 
             use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
@@ -377,14 +377,14 @@ elif menu_selection == "📊 Pipeline Dashboard":
                 "team_assigned": "Team",
                 "parking_pin": None,
                 "variety": "Turf", 
-                "m2_area": "Ord",  
+                "m2_area": st.column_config.NumberColumn("M2", width="small"),  
                 "pallet_size": None, "full_pallets": None, "loose_rolls": None,
-                "harvest_date": "H-Date", 
-                "install_date": "I-Date", 
+                "harvest_date": st.column_config.TextColumn("Harvest Date", width="medium"), 
+                "install_date": st.column_config.TextColumn("Install Date", width="medium"), 
                 "status": "Status",
-                "amount_harvested": "Harv", 
-                "amount_installed": "Inst", 
-                "remaining_balance": "Bal", 
+                "amount_harvested": st.column_config.NumberColumn("Harv", width="small"), 
+                "amount_installed": st.column_config.NumberColumn("Inst", width="small"), 
+                "remaining_balance": st.column_config.NumberColumn("Bal", width="small"), 
                 "created_at": None
             }
         )
@@ -448,40 +448,41 @@ elif menu_selection == "➕ Enter New Order":
     r1_col1, r1_col2 = st.columns(2)
     with r1_col1:
         if not tba_dates:
-            install_date = st.date_input("1. Confirmed Install Date", value=None, format="DD/MM/YYYY")
+            # Shortened labels here so the Chromebook screen doesn't squish the date box
+            install_date = st.date_input("1. Install Date", value=None, format="DD/MM/YYYY")
             default_harvest = (install_date - datetime.timedelta(days=1)) if install_date else None
-            harvest_date = st.date_input("Confirmed Harvest Date (Auto-Calculated)", value=default_harvest, format="DD/MM/YYYY")
+            harvest_date = st.date_input("2. Harvest Date (Auto)", value=default_harvest, format="DD/MM/YYYY")
         else:
             install_date = None
             harvest_date = None
             st.info("No dates selected (Pending Pipeline)")
     with r1_col2:
         customers = get_customers()
-        selected_customer = st.selectbox("2. Select Customer", customers, index=None, placeholder="Choose a Customer...")
+        selected_customer = st.selectbox("3. Select Customer", customers, index=None, placeholder="Choose a Customer...")
 
     # --- ROW 2: Service & Variety ---
     r2_col1, r2_col2 = st.columns(2)
     with r2_col1:
-        selected_service = st.selectbox("3. Service Required", service_options, index=None, placeholder="Select Service...")
+        selected_service = st.selectbox("4. Service Required", service_options, index=None, placeholder="Select Service...")
     with r2_col2:
-        variety = st.selectbox("4. Turf Variety", varieties, index=None, placeholder="Select Variety...")
+        variety = st.selectbox("5. Turf Variety", varieties, index=None, placeholder="Select Variety...")
 
     # --- ROW 3: Qty & Team Assigned ---
     r3_col1, r3_col2 = st.columns(2)
     with r3_col1:
-        m2_area = st.number_input("5. Total Qty Required (M2)", min_value=10, step=10, value=None, placeholder="Enter total area...")
+        m2_area = st.number_input("6. Total Qty Required (M2)", min_value=10, step=10, value=None, placeholder="Enter total area...")
     with r3_col2:
-        selected_team = st.selectbox("6. Team Assigned (Optional)", teams_list, index=None, placeholder="Leave blank if unknown...")
+        selected_team = st.selectbox("7. Team Assigned (Optional)", teams_list, index=None, placeholder="Leave blank if unknown...")
 
     # --- ROW 4: Transport & Job Site ---
     r4_col1, r4_col2 = st.columns(2)
     with r4_col1:
-        selected_transport = st.selectbox("7. Transport / Fleet (Optional)", transport_list, index=None, placeholder="Leave blank if unknown...")
+        selected_transport = st.selectbox("8. Transport / Fleet (Optional)", transport_list, index=None, placeholder="Leave blank if unknown...")
     with r4_col2:
         existing_sites = get_sites_for_customer(selected_customer) if selected_customer else []
         site_options = existing_sites + ["➕ Add New Site Address"] if existing_sites else ["➕ Add New Site Address"]
         
-        selected_site_option = st.selectbox("8. Job Site Address", site_options, index=None, placeholder="Select or Add New...")
+        selected_site_option = st.selectbox("9. Job Site Address", site_options, index=None, placeholder="Select or Add New...")
         
         if selected_site_option == "➕ Add New Site Address":
             final_site = st.text_input("Type New Job Site Address:")
@@ -498,7 +499,7 @@ elif menu_selection == "➕ Enter New Order":
             existing_contacts = []
             contact_options = ["➕ Add New Contact"]
             
-        selected_contact_option = st.selectbox("9. Site Contact (Optional)", contact_options, index=None, placeholder="Select or Add New...")
+        selected_contact_option = st.selectbox("10. Site Contact (Optional)", contact_options, index=None, placeholder="Select or Add New...")
         
         if selected_contact_option == "➕ Add New Contact":
             sc_col1, sc_col2 = st.columns(2)
@@ -513,7 +514,7 @@ elif menu_selection == "➕ Enter New Order":
                 st.text_input("Phone Number:", value=final_phone, disabled=True)
                 
     with r5_col2:
-        po_number = st.text_input("10. Customer PO (Optional)", placeholder="e.g. PO-99214")
+        po_number = st.text_input("11. Customer PO (Optional)", placeholder="e.g. PO-99214")
         parking_pin = st.text_input("📍 B-Double Parking Pin Link (Optional)", placeholder="Paste Google Maps link here...")
 
     # --- Extra Fields ---
