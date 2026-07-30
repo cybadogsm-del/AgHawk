@@ -6,7 +6,10 @@ import time
 from pathlib import Path
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Turf Galore Sched", layout="wide")
+# --- BRANDING ---
+LOGO_URL = "https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w"
+
+st.set_page_config(page_title="TG Schedule", page_icon=LOGO_URL, layout="wide")
 
 # --- CUSTOM CSS FOR SIDEBAR & LAYOUT ---
 st.markdown("""
@@ -23,8 +26,6 @@ if "scroll_to_top" not in st.session_state:
     st.session_state.scroll_to_top = False
 
 if st.session_state.scroll_to_top:
-    # Adding a micro-delay (150ms) ensures Streamlit finishes rendering before we force the scroll.
-    # The time.time() cache buster forces Streamlit to execute this script every single time.
     js = f"""
     <script>
         setTimeout(function() {{
@@ -188,16 +189,16 @@ if not st.session_state.logged_in:
     col1, col2, col3 = st.columns([1, 1.5, 1])
     
     with col2:
-        st.image("https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w", use_container_width=True)
+        st.image(LOGO_URL, use_container_width=True)
         st.markdown("<h3 style='text-align: center;'>Schedule & Dispatch Login</h3>", unsafe_allow_html=True)
         
         with st.form("login_form"):
             username = st.text_input("Username").strip().lower()
-            pin = st.text_input("PIN (Password)", type="password").strip()
+            pin_input = st.text_input("PIN (Password)", type="password").strip()
             submitted = st.form_submit_button("Log In", use_container_width=True)
             
             if submitted:
-                user_record = run_query("SELECT username, role FROM users WHERE LOWER(username)=? AND pin=?", (username, pin))
+                user_record = run_query("SELECT username, role FROM users WHERE LOWER(username)=? AND pin=?", (username, pin_input))
                 if user_record:
                     st.session_state.logged_in = True
                     st.session_state.current_user = user_record[0][0].capitalize()
@@ -225,7 +226,7 @@ service_options = ["Supply Only", "Supply & Deliver", "Supply & Install"]
 role_options = ["👑 Ops Manager/Admin", "🚜 Farm Staff", "👷 Site Supervisors", "🚚 Linehaul Drivers", "🛠️ Installers"]
 
 # --- SIDEBAR LOGO & USER PROFILE ---
-st.sidebar.image("https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w", use_container_width=True)
+st.sidebar.image(LOGO_URL, use_container_width=True)
 st.sidebar.success(f"👤 **{st.session_state.current_user}**\n\n{st.session_state.user_role}")
 if st.sidebar.button("🚪 Log Out", use_container_width=True):
     st.session_state.logged_in = False
@@ -415,7 +416,7 @@ if st.session_state.editing_order is not None:
 # ROUTING LOGIC BASED ON MENU (Only runs if NOT drilling down)
 # =====================================================================
 elif menu_selection == "📊 Pipeline Dashboard":
-    st.title("🚜 Turf Galore Sched — Ops Dashboard")
+    st.title("🚜 Ops Dashboard")
     
     col_filter, _ = st.columns([1, 3])
     with col_filter:
@@ -792,7 +793,6 @@ elif menu_selection == "👤 Manage Users":
                         
         st.divider()
         with st.expander("🗑️ Delete User"):
-            # Don't let the admin delete themselves by accident
             delete_candidates = users_df[users_df['username'] != st.session_state.current_user.lower()]['username'].tolist()
             if not delete_candidates:
                 st.info("No other users to delete.")
