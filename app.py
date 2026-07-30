@@ -7,6 +7,17 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Turf Galore Sched", layout="wide")
 
+# --- CUSTOM CSS FOR SIDEBAR & LAYOUT ---
+st.markdown("""
+    <style>
+        /* Force the sidebar to be slimmer to give the dashboard more room */
+        [data-testid="stSidebar"] {
+            min-width: 220px !important;
+            max-width: 220px !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- SCROLL TO TOP HACK ---
 if "scroll_to_top" not in st.session_state:
     st.session_state.scroll_to_top = False
@@ -360,7 +371,8 @@ elif menu_selection == "📊 Pipeline Dashboard":
         
         st.markdown("💡 **Click any row to drill down into the order details.**")
         
-        # Explicit width definitions for the dates so they can't be squished
+        # By setting the header explicitly to "Harvest Date", we naturally widen the column 
+        # so the full 10-character string "30/07/2026" easily fits without manual width hacks!
         selection_event = st.dataframe(
             styled_df, 
             use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
@@ -377,14 +389,14 @@ elif menu_selection == "📊 Pipeline Dashboard":
                 "team_assigned": "Team",
                 "parking_pin": None,
                 "variety": "Turf", 
-                "m2_area": st.column_config.NumberColumn("M2", width="small"),  
+                "m2_area": "M2",  
                 "pallet_size": None, "full_pallets": None, "loose_rolls": None,
-                "harvest_date": st.column_config.TextColumn("Harvest Date", width="medium"), 
-                "install_date": st.column_config.TextColumn("Install Date", width="medium"), 
+                "harvest_date": "Harvest Date", 
+                "install_date": "Install Date", 
                 "status": "Status",
-                "amount_harvested": st.column_config.NumberColumn("Harv", width="small"), 
-                "amount_installed": st.column_config.NumberColumn("Inst", width="small"), 
-                "remaining_balance": st.column_config.NumberColumn("Bal", width="small"), 
+                "amount_harvested": "Harv", 
+                "amount_installed": "Inst", 
+                "remaining_balance": "Bal", 
                 "created_at": None
             }
         )
@@ -448,7 +460,6 @@ elif menu_selection == "➕ Enter New Order":
     r1_col1, r1_col2 = st.columns(2)
     with r1_col1:
         if not tba_dates:
-            # Shortened labels here so the Chromebook screen doesn't squish the date box
             install_date = st.date_input("1. Install Date", value=None, format="DD/MM/YYYY")
             default_harvest = (install_date - datetime.timedelta(days=1)) if install_date else None
             harvest_date = st.date_input("2. Harvest Date (Auto)", value=default_harvest, format="DD/MM/YYYY")
