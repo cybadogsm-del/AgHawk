@@ -252,7 +252,7 @@ st.sidebar.markdown("<br><br>", unsafe_allow_html=True)
 st.sidebar.markdown(
     "<div style='font-size: 0.75rem; color: #6c757d; line-height: 1.3; text-align: center; border-top: 1px solid #444; padding-top: 10px;'>"
     "© 2026 Proprietary Software.<br>"
-    "Independently developed & owned.<br>"
+    "Independently developed & owned by <b>Steven Mitchell</b>.<br>"
     "Licensed exclusively for internal use by Turf Galore."
     "</div>", 
     unsafe_allow_html=True
