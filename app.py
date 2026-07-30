@@ -32,11 +32,13 @@ def format_aus_date(date_str):
     try: return datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%d/%m/%Y")
     except: return date_str
 
-# --- SESSION STATE FOR DRILL-DOWN ---
+# --- SESSION STATES ---
 if "editing_order" not in st.session_state:
     st.session_state.editing_order = None
 if "last_menu" not in st.session_state:
     st.session_state.last_menu = None
+if "run_date" not in st.session_state:
+    st.session_state.run_date = datetime.date.today()
 
 # --- SIDEBAR LOGO ---
 st.sidebar.image("https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w", use_container_width=True)
@@ -371,8 +373,6 @@ elif menu_selection == "📊 Pipeline Dashboard":
         
         st.markdown("💡 **Click any row to drill down into the order details.**")
         
-        # By setting the header explicitly to "Harvest Date", we naturally widen the column 
-        # so the full 10-character string "30/07/2026" easily fits without manual width hacks!
         selection_event = st.dataframe(
             styled_df, 
             use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
@@ -410,10 +410,29 @@ elif menu_selection == "📊 Pipeline Dashboard":
 elif menu_selection == "📋 Daily Run Sheet":
     st.title("📋 Daily Run Sheet")
     
-    col_date, _ = st.columns([1, 3])
-    with col_date:
-        target_date = st.date_input("Select Date for Run Sheet", datetime.date.today(), format="DD/MM/YYYY")
-    target_date_str = target_date.strftime("%Y-%m-%d")
+    # --- QUICK JUMP DATE CONTROLS ---
+    col1, col2, col3, col4, _ = st.columns([1, 1, 1, 2, 3])
+    
+    with col1:
+        if st.button("⬅️ Prev Day", use_container_width=True):
+            st.session_state.run_date -= datetime.timedelta(days=1)
+            st.rerun()
+    with col2:
+        if st.button("Today", use_container_width=True):
+            st.session_state.run_date = datetime.date.today()
+            st.rerun()
+    with col3:
+        if st.button("Next Day ➡️", use_container_width=True):
+            st.session_state.run_date += datetime.timedelta(days=1)
+            st.rerun()
+    with col4:
+        # The date input has a calendar icon and you can click the box to open it
+        selected_date = st.date_input("🗓️ Calendar Pop-Up (Click to open)", value=st.session_state.run_date, format="DD/MM/YYYY")
+        if selected_date != st.session_state.run_date:
+            st.session_state.run_date = selected_date
+            st.rerun()
+
+    target_date_str = st.session_state.run_date.strftime("%Y-%m-%d")
     
     conn = sqlite3.connect(DB_PATH)
     harvests = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
@@ -429,7 +448,7 @@ elif menu_selection == "📋 Daily Run Sheet":
         "amount_harvested": "Harv. M2", "amount_installed": "Inst. M2"
     }
 
-    st.subheader(f"🚜 Harvests for {target_date.strftime('%d/%m/%Y')}")
+    st.subheader(f"🚜 Harvests for {st.session_state.run_date.strftime('%d/%m/%Y')}")
     if harvests.empty: st.info("No harvests scheduled for this date.")
     else: 
         st.markdown("💡 **Click any row to view full order.**")
@@ -441,7 +460,7 @@ elif menu_selection == "📋 Daily Run Sheet":
         
     st.divider()
     
-    st.subheader(f"🌱 Installs for {target_date.strftime('%d/%m/%Y')}")
+    st.subheader(f"🌱 Installs for {st.session_state.run_date.strftime('%d/%m/%Y')}")
     if installs.empty: st.info("No installs scheduled for this date.")
     else: 
         st.markdown("💡 **Click any row to view full order.**")
