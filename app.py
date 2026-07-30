@@ -246,7 +246,17 @@ else:
 
 index_selection = menu_options.index(st.session_state.last_menu) if st.session_state.last_menu in menu_options else 0
 menu_selection = st.sidebar.radio("Main Menu:", menu_options, index=index_selection)
-st.sidebar.divider()
+
+# --- IP OWNERSHIP FOOTER ---
+st.sidebar.markdown("<br><br>", unsafe_allow_html=True)
+st.sidebar.markdown(
+    "<div style='font-size: 0.75rem; color: #6c757d; line-height: 1.3; text-align: center; border-top: 1px solid #444; padding-top: 10px;'>"
+    "© 2026 Proprietary Software.<br>"
+    "Independently developed & owned.<br>"
+    "Licensed exclusively for internal use by Turf Galore."
+    "</div>", 
+    unsafe_allow_html=True
+)
 
 if st.session_state.last_menu != menu_selection:
     st.session_state.editing_order = None
@@ -424,7 +434,6 @@ elif menu_selection == "📊 Pipeline Dashboard":
     
     conn = sqlite3.connect(DB_PATH)
     if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
-        # Sort so days group correctly. Empty strings (TBA) will sort first if we aren't careful, so we handle it below.
         df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY harvest_date ASC, created_at DESC", conn)
     elif view_mode == "Completed & Cancelled":
         df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Installed', 'Cancelled') ORDER BY created_at DESC", conn)
@@ -453,7 +462,6 @@ elif menu_selection == "📊 Pipeline Dashboard":
         if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
             st.markdown("💡 **Click any row to drill down into the order details.**")
             
-            # Grouping Logic for Pipeline
             df['sort_date'] = df['harvest_date'].replace("", "9999-99-99") 
             df = df.sort_values(by=['sort_date', 'created_at'], ascending=[True, False])
             unique_dates = df['harvest_date'].unique()
@@ -466,7 +474,6 @@ elif menu_selection == "📊 Pipeline Dashboard":
                 else:
                     st.subheader(f"📅 Harvest Date: {format_aus_date(h_date)}")
                 
-                # Format dates for display
                 date_df['harvest_date_str'] = date_df['harvest_date'].apply(format_aus_date)
                 date_df['install_date_str'] = date_df['install_date'].apply(format_aus_date)
                 
@@ -489,7 +496,6 @@ elif menu_selection == "📊 Pipeline Dashboard":
                     st.session_state.scroll_to_top = True
                     st.rerun()
                     
-                # --- NEW CAPACITY SUMMARY LINE ---
                 if h_date != "":
                     tot_full = date_df['full_pallets'].sum()
                     tot_loose = (date_df['loose_rolls'] > 0).sum()
@@ -505,7 +511,6 @@ elif menu_selection == "📊 Pipeline Dashboard":
                 st.divider()
                 
         else:
-            # Standard flat table for Completed/Cancelled & All Orders
             df['harvest_date'] = df['harvest_date'].apply(format_aus_date)
             df['install_date'] = df['install_date'].apply(format_aus_date)
             styled_df = df.style.apply(row_color, axis=1)
@@ -525,7 +530,6 @@ elif menu_selection == "📊 Pipeline Dashboard":
 elif menu_selection == "📋 Daily Run Sheet":
     st.title("📋 Daily Run Sheet")
     
-    # --- QUICK JUMP DATE CONTROLS ---
     col1, col2, col3, col4, _ = st.columns([1, 1, 1, 2, 3])
     
     with col1:
@@ -550,7 +554,6 @@ elif menu_selection == "📋 Daily Run Sheet":
     
     conn = sqlite3.connect(DB_PATH)
     
-    # Check Capacity for the selected Run Date
     cap_res = pd.read_sql_query(f"SELECT SUM(full_pallets) as tot_full, SUM(CASE WHEN loose_rolls > 0 THEN 1 ELSE 0 END) as tot_loose FROM orders WHERE harvest_date = '{target_date_str}' AND status NOT IN ('Cancelled')", conn)
     run_tot_pallets = int(cap_res.iloc[0]['tot_full'] or 0) + int(cap_res.iloc[0]['tot_loose'] or 0)
     
@@ -558,7 +561,6 @@ elif menu_selection == "📋 Daily Run Sheet":
     installs = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     conn.close()
     
-    # --- CONSISTENT CAPACITY WARNING ON RUN SHEET ---
     if run_tot_pallets < 60:
         st.success(f"🟢 **Fleet Capacity ({st.session_state.run_date.strftime('%d/%m')}):** {run_tot_pallets} / 60 Pallets Used ({60 - run_tot_pallets} Available)")
     elif run_tot_pallets == 60:
