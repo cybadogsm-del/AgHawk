@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import datetime
+import time
 from pathlib import Path
 import streamlit.components.v1 as components
 
@@ -17,12 +18,26 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- SCROLL TO TOP HACK ---
+# --- SCROLL TO TOP HACK (UPGRADED) ---
 if "scroll_to_top" not in st.session_state:
     st.session_state.scroll_to_top = False
 
 if st.session_state.scroll_to_top:
-    components.html("<script>window.parent.scrollTo(0, 0);</script>", height=0)
+    # Adding a micro-delay (150ms) ensures Streamlit finishes rendering before we force the scroll.
+    # The time.time() cache buster forces Streamlit to execute this script every single time.
+    js = f"""
+    <script>
+        setTimeout(function() {{
+            window.parent.scrollTo(0, 0);
+            var mainContainer = window.parent.document.querySelector('.main');
+            if (mainContainer) {{
+                mainContainer.scrollTo(0, 0);
+            }}
+        }}, 150);
+    </script>
+    <!-- Cache Buster: {time.time()} -->
+    """
+    components.html(js, height=0)
     st.session_state.scroll_to_top = False
 
 # --- DATE FORMATTER HELPER ---
@@ -182,7 +197,6 @@ if not st.session_state.logged_in:
             submitted = st.form_submit_button("Log In", use_container_width=True)
             
             if submitted:
-                # Query DB to check credentials
                 user_record = run_query("SELECT username, role FROM users WHERE LOWER(username)=? AND pin=?", (username, pin))
                 if user_record:
                     st.session_state.logged_in = True
