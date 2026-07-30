@@ -8,15 +8,11 @@ import streamlit.components.v1 as components
 
 # --- BRANDING ---
 LOGO_URL = "https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w"
-
-# Added initial_sidebar_state="collapsed" to force the mobile slide-out menu!
 st.set_page_config(page_title="TG Schedule", page_icon=LOGO_URL, layout="wide", initial_sidebar_state="collapsed")
 
 # --- CUSTOM CSS FOR SIDEBAR & LAYOUT ---
 st.markdown("""
     <style>
-        /* Force the sidebar to be slimmer ONLY on true desktop screens (1024px+). */
-        /* On phones and tablets, let Streamlit auto-collapse it into a slide-out menu! */
         @media (min-width: 1024px) {
             [data-testid="stSidebar"] {
                 min-width: 220px !important;
@@ -26,7 +22,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- SCROLL TO TOP HACK (UPGRADED) ---
+# --- SCROLL TO TOP HACK ---
 if "scroll_to_top" not in st.session_state:
     st.session_state.scroll_to_top = False
 
@@ -73,7 +69,6 @@ def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Core tables
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,7 +104,6 @@ def init_database():
     if 'parking_pin' not in columns:
         cursor.execute("ALTER TABLE orders ADD COLUMN parking_pin TEXT DEFAULT ''")
     
-    # Config tables
     cursor.execute("CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_name TEXT NOT NULL, site_address TEXT NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
@@ -118,7 +112,6 @@ def init_database():
     cursor.execute("CREATE TABLE IF NOT EXISTS transport_options (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     
-    # User Auth table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,7 +121,6 @@ def init_database():
         )
     """)
     
-    # Populate defaults if empty
     cursor.execute("SELECT COUNT(*) FROM customers")
     if cursor.fetchone()[0] == 0:
         cursor.executemany("INSERT INTO customers (name) VALUES (?)", [("EXCELL GRAY",), ("FLEMINGS",), ("NEDGE",), ("GREEN CONCEPTS",)])
@@ -139,7 +131,6 @@ def init_database():
         cursor.executemany("INSERT INTO transport_options (name) VALUES (?)", [("Fleet Truck #1",), ("Fleet Truck #2",), ("Subbie - John Doe Transport",), ("TBA",)])
         cursor.executemany("INSERT INTO teams (name) VALUES (?)", [("Install Team Alpha",), ("Install Team Bravo",), ("TBA",)])
     
-    # Default Admin User
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO users (username, pin, role) VALUES (?, ?, ?)", ("admin", "1234", "👑 Ops Manager/Admin"))
@@ -183,7 +174,6 @@ def save_new_order(customer, po, site, contact, phone, special, service, transpo
     """
     run_query(query, (customer, po, site, contact, phone, special, service, transport, team, pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status, m2_area))
 
-# Initialize database on app start
 init_database()
 
 # =====================================================================
@@ -213,8 +203,6 @@ if not st.session_state.logged_in:
                     st.error("❌ Invalid Username or PIN")
         
         st.info("💡 **First time?** Try Username: `admin` | PIN: `1234`")
-    
-    # STOP EXECUTION HERE IF NOT LOGGED IN
     st.stop()
 
 
@@ -230,8 +218,15 @@ teams_list = get_teams()
 service_options = ["Supply Only", "Supply & Deliver", "Supply & Install"]
 role_options = ["👑 Ops Manager/Admin", "🚜 Farm Staff", "👷 Site Supervisors", "🚚 Linehaul Drivers", "🛠️ Installers"]
 
-# --- SIDEBAR LOGO & USER PROFILE ---
+# --- SIDEBAR LOGO & HOME BUTTON ---
 st.sidebar.image(LOGO_URL, use_container_width=True)
+
+if st.sidebar.button("🏠 Home / Reset View", use_container_width=True, type="primary"):
+    st.session_state.editing_order = None
+    st.session_state.last_menu = "📊 Pipeline Dashboard"
+    st.session_state.scroll_to_top = True
+    st.rerun()
+
 st.sidebar.success(f"👤 **{st.session_state.current_user}**\n\n{st.session_state.user_role}")
 if st.sidebar.button("🚪 Log Out", use_container_width=True):
     st.session_state.logged_in = False
@@ -249,10 +244,12 @@ if user_role == "👑 Ops Manager/Admin":
 else: 
     menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet"]
 
-menu_selection = st.sidebar.radio("Main Menu:", menu_options)
+# If the Home button was clicked, we force the menu radio button to match
+index_selection = menu_options.index(st.session_state.last_menu) if st.session_state.last_menu in menu_options else 0
+menu_selection = st.sidebar.radio("Main Menu:", menu_options, index=index_selection)
 st.sidebar.divider()
 
-# Reset drill-down & trigger scroll if they click a different menu tab
+# Reset drill-down & trigger scroll if they click a different menu tab naturally
 if st.session_state.last_menu != menu_selection:
     st.session_state.editing_order = None
     st.session_state.last_menu = menu_selection
@@ -423,11 +420,54 @@ if st.session_state.editing_order is not None:
 elif menu_selection == "📊 Pipeline Dashboard":
     st.title("🚜 Ops Dashboard")
     
+    # --- 7-DAY CAPACITY FORECAST ---
+    st.subheader("🚛 7-Day Fleet Capacity Forecast (Farm Dispatch)")
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    
+    conn = sqlite3.connect(DB_PATH)
+    cap_df = pd.read_sql_query(f"""
+        SELECT harvest_date, SUM(full_pallets) as tot_full, SUM(CASE WHEN loose_rolls > 0 THEN 1 ELSE 0 END) as tot_loose 
+        FROM orders 
+        WHERE status NOT IN ('Installed', 'Cancelled') 
+          AND harvest_date >= '{today_str}' 
+          AND harvest_date != ''
+        GROUP BY harvest_date
+        ORDER BY harvest_date ASC
+        LIMIT 7
+    """, conn)
+    
+    if cap_df.empty:
+        st.info("No active harvests scheduled for the upcoming 7 days.")
+    else:
+        # Dynamically create columns based on how many active days we found
+        cap_cols = st.columns(len(cap_df))
+        for idx, row in cap_df.iterrows():
+            date_obj = datetime.datetime.strptime(row['harvest_date'], "%Y-%m-%d")
+            display_date = date_obj.strftime("%d/%m")
+            day_name = date_obj.strftime("%a")
+            
+            # Math: Total Full Pallets + 1 extra pallet space if there are loose rolls on the order
+            tot_pallets = int(row['tot_full'] or 0) + int(row['tot_loose'] or 0)
+            avail = 60 - tot_pallets
+            
+            with cap_cols[idx]:
+                with st.container(border=True):
+                    st.markdown(f"**{day_name} {display_date}**")
+                    if tot_pallets <= 60:
+                        st.markdown(f"📦 {tot_pallets}/60 Used")
+                        st.success(f"{avail} Plt Avail")
+                    else:
+                        st.markdown(f"📦 **{tot_pallets}/60 Used**")
+                        st.error(f"⚠️ {abs(avail)} OVER CAP")
+                        st.caption("Subbie Req.")
+
+    st.write("---")
+    
+    # --- PIPELINE TABLE ---
     col_filter, _ = st.columns([1, 3])
     with col_filter:
         view_mode = st.selectbox("View Filter:", ["Active Pipeline (Pending/Locked/Harvested)", "Completed & Cancelled", "Show All Orders"])
     
-    conn = sqlite3.connect(DB_PATH)
     if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
         df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY created_at DESC", conn)
     elif view_mode == "Completed & Cancelled":
@@ -512,9 +552,20 @@ elif menu_selection == "📋 Daily Run Sheet":
     target_date_str = st.session_state.run_date.strftime("%Y-%m-%d")
     
     conn = sqlite3.connect(DB_PATH)
+    
+    # Check Capacity for the selected Run Date
+    cap_res = pd.read_sql_query(f"SELECT SUM(full_pallets) as tot_full, SUM(CASE WHEN loose_rolls > 0 THEN 1 ELSE 0 END) as tot_loose FROM orders WHERE harvest_date = '{target_date_str}' AND status NOT IN ('Cancelled')", conn)
+    run_tot_pallets = int(cap_res.iloc[0]['tot_full'] or 0) + int(cap_res.iloc[0]['tot_loose'] or 0)
+    
     harvests = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     installs = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
     conn.close()
+    
+    # --- DISPLAY CAPACITY WARNING ON RUN SHEET ---
+    if run_tot_pallets <= 60:
+        st.success(f"🚛 **Fleet Dispatch Capacity for {st.session_state.run_date.strftime('%d/%m')}:** {run_tot_pallets} / 60 Pallets Used ({60 - run_tot_pallets} Available)")
+    else:
+        st.error(f"🚨 **FLEET OVER CAPACITY FOR {st.session_state.run_date.strftime('%d/%m')}:** {run_tot_pallets} / 60 Pallets Used. **Subcontractor required for {run_tot_pallets - 60} pallets.**")
     
     clean_columns = {
         "id": None, 
