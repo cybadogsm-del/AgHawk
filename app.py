@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 import datetime
 import time
 from pathlib import Path
 import streamlit.components.v1 as components
-import libsql_client
 
 # --- BRANDING ---
 LOGO_URL = "https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w"
@@ -62,40 +62,23 @@ if "current_user" not in st.session_state:
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
 
+# --- DATABASE SETUP (SQLITE) ---
+DB_PATH = Path("turf_orders_v11.db")
 
-# --- DATABASE SETUP (TURSO VIA LIBSQL_CLIENT) ---
-
-# Fetch secrets configured in Streamlit Cloud
-try:
-    TURSO_URL = st.secrets["TURSO_DATABASE_URL"]
-    TURSO_AUTH_TOKEN = st.secrets["TURSO_AUTH_TOKEN"]
-except KeyError:
-    st.error("Turso Secrets missing. Please configure TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in Streamlit secrets.")
-    st.stop()
-
-# Helper function to connect to the Turso Database using the sync API
-def get_db_client():
-    return libsql_client.create_client_sync(url=TURSO_URL, auth_token=TURSO_AUTH_TOKEN)
-
-# Helper function for write queries (INSERT, UPDATE, DELETE)
-def execute_write(query, args=None):
-    if args is None:
-        args = []
-    with get_db_client() as client:
-        client.execute(query, args)
-
-# Helper function for read queries (SELECT)
-def execute_read(query, args=None):
-    if args is None:
-        args = []
-    with get_db_client() as client:
-        result_set = client.execute(query, args)
-        # Convert ResultSet into a list of dictionaries for easier pandas conversion
-        return [dict(zip(result_set.columns, row)) for row in result_set.rows]
+def run_query(query, params=()):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    result = cursor.fetchall()
+    conn.commit()
+    conn.close()
+    return result
 
 def init_database():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    execute_write("""
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             customer TEXT NOT NULL,
@@ -123,23 +106,30 @@ def init_database():
         )
     """)
     
-    execute_write("CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
-    execute_write("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_name TEXT NOT NULL, site_address TEXT NOT NULL)")
-    execute_write("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
-    execute_write("CREATE TABLE IF NOT EXISTS varieties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
-    execute_write("CREATE TABLE IF NOT EXISTS pallet_sizes (id INTEGER PRIMARY KEY AUTOINCREMENT, size INTEGER UNIQUE NOT NULL)")
+    cursor.execute("PRAGMA table_info(orders)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'team_assigned' not in columns:
+        cursor.execute("ALTER TABLE orders ADD COLUMN team_assigned TEXT DEFAULT ''")
+    if 'parking_pin' not in columns:
+        cursor.execute("ALTER TABLE orders ADD COLUMN parking_pin TEXT DEFAULT ''")
     
-    # Updated Transport Options with Pallet Capacity
-    execute_write("""
+    cursor.execute("CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_name TEXT NOT NULL, site_address TEXT NOT NULL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, site_address TEXT NOT NULL, contact_name TEXT NOT NULL, phone TEXT NOT NULL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS varieties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS pallet_sizes (id INTEGER PRIMARY KEY AUTOINCREMENT, size INTEGER UNIQUE NOT NULL)")
+    
+    # New Transport Table with Capacity limits
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS transport_options (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
             name TEXT UNIQUE NOT NULL,
             pallet_capacity INTEGER DEFAULT 30
         )
     """)
-    execute_write("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     
-    execute_write("""
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
@@ -147,69 +137,60 @@ def init_database():
             role TEXT NOT NULL
         )
     """)
-
-    # Seed Default Data ONLY if the tables are empty
-    if not execute_read("SELECT 1 FROM customers LIMIT 1"):
-        execute_write("INSERT INTO customers (name) VALUES (?)", ["EXCELL GRAY"])
-        execute_write("INSERT INTO customers (name) VALUES (?)", ["FLEMINGS"])
-        execute_write("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", ["EXCELL GRAY", "123 Spring St, Melbourne"])
-        execute_write("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", ["123 Spring St, Melbourne", "Dave Foreman", "0412 345 678"])
-        
-    if not execute_read("SELECT 1 FROM varieties LIMIT 1"):
-        execute_write("INSERT INTO varieties (name) VALUES (?)", ["Kikuyu"])
-        execute_write("INSERT INTO varieties (name) VALUES (?)", ["Santa Anna Couch"])
-        
-    if not execute_read("SELECT 1 FROM pallet_sizes LIMIT 1"):
-        execute_write("INSERT INTO pallet_sizes (size) VALUES (?)", [60])
-        execute_write("INSERT INTO pallet_sizes (size) VALUES (?)", [70])
-        
-    if not execute_read("SELECT 1 FROM transport_options LIMIT 1"):
-        # Seed transport with dynamic capacity values
-        execute_write("INSERT INTO transport_options (name, pallet_capacity) VALUES (?, ?)", ["Fleet Truck #1", 30])
-        execute_write("INSERT INTO transport_options (name, pallet_capacity) VALUES (?, ?)", ["Fleet Truck #2", 30])
-        execute_write("INSERT INTO transport_options (name, pallet_capacity) VALUES (?, ?)", ["TBA", 0])
-        
-    if not execute_read("SELECT 1 FROM teams LIMIT 1"):
-        execute_write("INSERT INTO teams (name) VALUES (?)", ["Install Team Alpha"])
-        execute_write("INSERT INTO teams (name) VALUES (?)", ["TBA"])
     
-    if not execute_read("SELECT 1 FROM users LIMIT 1"):
-        execute_write("INSERT INTO users (username, pin, role) VALUES (?, ?, ?)", ["admin", "1234", "👑 Ops Manager/Admin"])
+    cursor.execute("SELECT COUNT(*) FROM customers")
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany("INSERT INTO customers (name) VALUES (?)", [("EXCELL GRAY",), ("FLEMINGS",), ("NEDGE",), ("GREEN CONCEPTS",)])
+        cursor.execute("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", ("EXCELL GRAY", "123 Spring St, Melbourne"))
+        cursor.execute("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", ("123 Spring St, Melbourne", "Dave Foreman", "0412 345 678"))
+        cursor.executemany("INSERT INTO varieties (name) VALUES (?)", [("Kikuyu",), ("Santa Anna Couch",), ("Buffalo",)])
+        cursor.executemany("INSERT INTO pallet_sizes (size) VALUES (?)", [(60,), (70,), (80,)])
+        
+        # Seed transport with dynamic capacity values
+        cursor.executemany("INSERT INTO transport_options (name, pallet_capacity) VALUES (?, ?)", [("Fleet Truck #1", 30), ("Fleet Truck #2", 30), ("TBA", 0)])
+        cursor.executemany("INSERT INTO teams (name) VALUES (?)", [("Install Team Alpha",), ("Install Team Bravo",), ("TBA",)])
+    
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO users (username, pin, role) VALUES (?, ?, ?)", ("admin", "1234", "👑 Ops Manager/Admin"))
+
+    conn.commit()
+    conn.close()
 
 # --- DATABASE HELPER FUNCTIONS ---
-def get_customers(): return [row['name'] for row in execute_read("SELECT name FROM customers ORDER BY name ASC")]
-def get_sites_for_customer(customer_name): return [row['site_address'] for row in execute_read("SELECT site_address FROM sites WHERE customer_name = ?", [customer_name])]
-def get_contacts_for_site(site_address): return execute_read("SELECT contact_name as name, phone FROM contacts WHERE site_address = ?", [site_address])
-def get_varieties(): return [row['name'] for row in execute_read("SELECT name FROM varieties ORDER BY name ASC")]
-def get_pallet_sizes(): return [row['size'] for row in execute_read("SELECT size FROM pallet_sizes ORDER BY size ASC")]
-def get_transport_options(): return [row['name'] for row in execute_read("SELECT name FROM transport_options ORDER BY name ASC")]
-def get_teams(): return [row['name'] for row in execute_read("SELECT name FROM teams ORDER BY name ASC")]
+def get_customers(): return [row[0] for row in run_query("SELECT name FROM customers ORDER BY name ASC")]
+def get_sites_for_customer(customer_name): return [row[0] for row in run_query("SELECT site_address FROM sites WHERE customer_name = ?", (customer_name,))]
+def get_contacts_for_site(site_address):
+    rows = run_query("SELECT contact_name, phone FROM contacts WHERE site_address = ?", (site_address,))
+    return [{"name": r[0], "phone": r[1]} for r in rows]
+def get_varieties(): return [row[0] for row in run_query("SELECT name FROM varieties ORDER BY name ASC")]
+def get_pallet_sizes(): return [row[0] for row in run_query("SELECT size FROM pallet_sizes ORDER BY size ASC")]
+def get_transport_options(): return [row[0] for row in run_query("SELECT name FROM transport_options ORDER BY name ASC")]
+def get_teams(): return [row[0] for row in run_query("SELECT name FROM teams ORDER BY name ASC")]
 
-# Function to calculate the total capacity of the active fleet
+# Function to calculate total capacity of active fleet
 def get_total_fleet_capacity():
-    result = execute_read("SELECT SUM(pallet_capacity) as total_cap FROM transport_options")
-    if result and result[0]['total_cap'] is not None:
-        return int(result[0]['total_cap'])
+    result = run_query("SELECT SUM(pallet_capacity) FROM transport_options")
+    if result and result[0][0] is not None:
+        return int(result[0][0])
     return 60 # Fallback default
 
 def save_new_order(customer, po, site, contact, phone, special, service, transport, team, pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status):
     existing_sites = get_sites_for_customer(customer)
     if site not in existing_sites and site.strip() != "":
-        execute_write("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", [customer, site])
+        run_query("INSERT INTO sites (customer_name, site_address) VALUES (?, ?)", (customer, site))
         
     if site.strip() != "" and contact.strip() != "":
         existing_contacts = [c["name"] for c in get_contacts_for_site(site)]
         if contact not in existing_contacts:
-            execute_write("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", [site, contact, phone])
+            run_query("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", (site, contact, phone))
             
     query = """
         INSERT INTO orders (customer, purchase_order, site_address, site_contact, contact_phone, special_instructions, service_type, transport_detail, team_assigned, parking_pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest_date, install_date, status, amount_harvested, amount_installed, remaining_balance)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
     """
-    execute_write(query, [customer, po, site, contact, phone, special, service, transport, team, pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status, m2_area])
+    run_query(query, (customer, po, site, contact, phone, special, service, transport, team, pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status, m2_area))
 
-
-# Initialize database upon every run
 init_database()
 
 
@@ -230,11 +211,11 @@ if not st.session_state.logged_in:
             submitted = st.form_submit_button("Log In", use_container_width=True)
             
             if submitted:
-                user_record = execute_read("SELECT username, role FROM users WHERE LOWER(username)=? AND pin=?", [username, pin_input])
+                user_record = run_query("SELECT username, role FROM users WHERE LOWER(username)=? AND pin=?", (username, pin_input))
                 if user_record:
                     st.session_state.logged_in = True
-                    st.session_state.current_user = user_record[0]['username'].capitalize()
-                    st.session_state.user_role = user_record[0]['role']
+                    st.session_state.current_user = user_record[0][0].capitalize()
+                    st.session_state.user_role = user_record[0][1]
                     st.rerun()
                 else:
                     st.error("❌ Invalid Username or PIN")
@@ -257,7 +238,6 @@ role_options = ["👑 Ops Manager/Admin", "🚜 Farm Staff", "👷 Site Supervis
 
 # Fetch Dynamic Fleet Capacity Limit
 FLEET_MAX_CAPACITY = get_total_fleet_capacity()
-
 
 # --- SIDEBAR LOGO & HOME BUTTON ---
 st.sidebar.image(LOGO_URL, use_container_width=True)
@@ -311,16 +291,18 @@ if st.session_state.last_menu != menu_selection:
 if st.session_state.editing_order is not None:
     order_id = st.session_state.editing_order
     
-    order_data = execute_read("SELECT * FROM orders WHERE id = ?", [order_id])
+    conn = sqlite3.connect(DB_PATH)
+    order_df = pd.read_sql_query(f"SELECT * FROM orders WHERE id = {order_id}", conn)
+    conn.close()
     
-    if not order_data:
+    if order_df.empty:
         st.error("Order not found.")
         if st.button(f"⬅️ Back to {menu_selection}"):
             st.session_state.editing_order = None
             st.session_state.scroll_to_top = True
             st.rerun()
     else:
-        selected_data = order_data[0]
+        selected_data = order_df.iloc[0]
         total_m2 = int(selected_data['m2_area'])
         harv_val = int(selected_data['amount_harvested'])
         inst_val = int(selected_data['amount_installed'])
@@ -450,11 +432,11 @@ if st.session_state.editing_order is not None:
                         full_pallets = int(total_m2 // final_pal)
                         loose_rolls = int(total_m2 % final_pal)
                         
-                        execute_write("""
+                        run_query("""
                             UPDATE orders SET 
                             purchase_order=?, service_type=?, transport_detail=?, team_assigned=?, parking_pin=?, special_instructions=?, amount_harvested=?, amount_installed=?, remaining_balance=?, status=?, pallet_size=?, full_pallets=?, loose_rolls=?
                             WHERE id=?
-                        """, [final_po, final_srv, final_trn, final_team, final_pin, final_note, final_harv, final_inst, final_rem, final_stat, final_pal, full_pallets, loose_rolls, order_id])
+                        """, (final_po, final_srv, final_trn, final_team, final_pin, final_note, final_harv, final_inst, final_rem, final_stat, final_pal, full_pallets, loose_rolls, order_id))
                         
                         st.session_state.editing_order = None
                         st.session_state.scroll_to_top = True
@@ -471,14 +453,14 @@ elif menu_selection == "📊 Pipeline Dashboard":
     with col_filter:
         view_mode = st.selectbox("View Filter:", ["Active Pipeline (Pending/Locked/Harvested)", "Completed & Cancelled", "Show All Orders"])
     
+    conn = sqlite3.connect(DB_PATH)
     if view_mode == "Active Pipeline (Pending/Locked/Harvested)":
-        data = execute_read("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY harvest_date ASC, created_at DESC")
+        df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Pending', 'Locked', 'Harvested') ORDER BY harvest_date ASC, created_at DESC", conn)
     elif view_mode == "Completed & Cancelled":
-        data = execute_read("SELECT * FROM orders WHERE status IN ('Installed', 'Cancelled') ORDER BY created_at DESC")
+        df = pd.read_sql_query("SELECT * FROM orders WHERE status IN ('Installed', 'Cancelled') ORDER BY created_at DESC", conn)
     else:
-        data = execute_read("SELECT * FROM orders ORDER BY created_at DESC")
-        
-    df = pd.DataFrame(data)
+        df = pd.read_sql_query("SELECT * FROM orders ORDER BY created_at DESC", conn)
+    conn.close()
     
     if df.empty:
         st.info("No orders found for this view.")
@@ -591,14 +573,14 @@ elif menu_selection == "📋 Daily Run Sheet":
 
     target_date_str = st.session_state.run_date.strftime("%Y-%m-%d")
     
-    cap_res = execute_read(f"SELECT SUM(full_pallets) as tot_full, SUM(CASE WHEN loose_rolls > 0 THEN 1 ELSE 0 END) as tot_loose FROM orders WHERE harvest_date = ? AND status NOT IN ('Cancelled')", [target_date_str])
-    if cap_res and cap_res[0]['tot_full'] is not None:
-        run_tot_pallets = int(cap_res[0]['tot_full']) + int(cap_res[0]['tot_loose'] or 0)
-    else:
-        run_tot_pallets = 0
-        
-    harvests = pd.DataFrame(execute_read("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", [target_date_str]))
-    installs = pd.DataFrame(execute_read("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE install_date = ? AND status != 'Cancelled'", [target_date_str]))
+    conn = sqlite3.connect(DB_PATH)
+    
+    cap_res = pd.read_sql_query(f"SELECT SUM(full_pallets) as tot_full, SUM(CASE WHEN loose_rolls > 0 THEN 1 ELSE 0 END) as tot_loose FROM orders WHERE harvest_date = '{target_date_str}' AND status NOT IN ('Cancelled')", conn)
+    run_tot_pallets = int(cap_res.iloc[0]['tot_full'] or 0) + int(cap_res.iloc[0]['tot_loose'] or 0)
+    
+    harvests = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
+    installs = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE install_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
+    conn.close()
     
     if run_tot_pallets < FLEET_MAX_CAPACITY:
         st.success(f"🟢 **Fleet Capacity ({st.session_state.run_date.strftime('%d/%m')}):** {run_tot_pallets} / {FLEET_MAX_CAPACITY} Pallets Used ({FLEET_MAX_CAPACITY - run_tot_pallets} Available)")
@@ -757,18 +739,18 @@ elif menu_selection == "👥 Manage Customers":
             if new_name == "": st.error("Please enter a name first.")
             else:
                 try:
-                    execute_write("INSERT INTO customers (name) VALUES (?)", [new_name.strip().upper()])
+                    run_query("INSERT INTO customers (name) VALUES (?)", (new_name.strip().upper(),))
                     st.success(f"Added {new_name.upper()}!")
                     st.session_state.scroll_to_top = True
                     st.rerun()
-                except Exception as e:
-                    st.error("That customer already exists or an error occurred!")
+                except sqlite3.IntegrityError:
+                    st.error("That customer already exists!")
         
         st.divider()
         with st.expander("🗑️ Delete a Customer"):
             del_cust = st.selectbox("Select Customer to Remove:", customers)
             if st.button("Delete Customer"):
-                execute_write("DELETE FROM customers WHERE name = ?", [del_cust])
+                run_query("DELETE FROM customers WHERE name = ?", (del_cust,))
                 st.success(f"Deleted {del_cust}")
                 st.session_state.scroll_to_top = True
                 st.rerun()
@@ -786,16 +768,16 @@ elif menu_selection == "⚙️ System Settings":
         if st.button("Save Variety"):
             if new_variety != "":
                 try:
-                    execute_write("INSERT INTO varieties (name) VALUES (?)", [new_variety.strip()])
+                    run_query("INSERT INTO varieties (name) VALUES (?)", (new_variety.strip(),))
                     st.success("Variety Added!")
                     st.rerun()
-                except Exception as e:
+                except sqlite3.IntegrityError:
                     st.error("Variety exists!")
                     
         with st.expander("🗑️ Delete Variety"):
             del_var = st.selectbox("Select to delete:", varieties, key="del_var_sel")
             if st.button("Delete", key="del_var_btn"):
-                execute_write("DELETE FROM varieties WHERE name = ?", [del_var])
+                run_query("DELETE FROM varieties WHERE name = ?", (del_var,))
                 st.rerun()
                     
     with col2:
@@ -805,23 +787,26 @@ elif menu_selection == "⚙️ System Settings":
         new_pallet = st.number_input("Add Pallet Size:", min_value=1, step=1, value=50)
         if st.button("Save Pallet Size"):
             try:
-                execute_write("INSERT INTO pallet_sizes (size) VALUES (?)", [int(new_pallet)])
+                run_query("INSERT INTO pallet_sizes (size) VALUES (?)", (int(new_pallet),))
                 st.success("Size Added!")
                 st.rerun()
-            except Exception as e:
+            except sqlite3.IntegrityError:
                 st.error("Size exists!")
                 
         with st.expander("🗑️ Delete Pallet Size"):
             del_pal = st.selectbox("Select to delete:", pallet_options, key="del_pal_sel")
             if st.button("Delete", key="del_pal_btn"):
-                execute_write("DELETE FROM pallet_sizes WHERE size = ?", [int(del_pal)])
+                run_query("DELETE FROM pallet_sizes WHERE size = ?", (int(del_pal),))
                 st.rerun()
                 
     with col3:
         st.subheader("🚚 Transport Fleet")
         
-        transport_data = execute_read("SELECT name, pallet_capacity FROM transport_options ORDER BY name ASC")
-        st.dataframe(pd.DataFrame(transport_data).rename(columns={'name': 'Fleet Name', 'pallet_capacity': 'Pallet Capacity'}), use_container_width=True, hide_index=True)
+        conn = sqlite3.connect(DB_PATH)
+        transport_data = pd.read_sql_query("SELECT name, pallet_capacity FROM transport_options ORDER BY name ASC", conn)
+        conn.close()
+        
+        st.dataframe(transport_data.rename(columns={'name': 'Fleet Name', 'pallet_capacity': 'Pallet Capacity'}), use_container_width=True, hide_index=True)
         
         st.markdown(f"**Total Active Fleet Capacity: {FLEET_MAX_CAPACITY} Pallets**")
         
@@ -831,16 +816,16 @@ elif menu_selection == "⚙️ System Settings":
         if st.button("Save Transport"):
             if new_transport != "":
                 try:
-                    execute_write("INSERT INTO transport_options (name, pallet_capacity) VALUES (?, ?)", [new_transport.strip(), int(new_capacity)])
+                    run_query("INSERT INTO transport_options (name, pallet_capacity) VALUES (?, ?)", (new_transport.strip(), int(new_capacity)))
                     st.success("Transport Added!")
                     st.rerun()
-                except Exception as e:
+                except sqlite3.IntegrityError:
                     st.error("Transport exists!")
 
         with st.expander("🗑️ Delete Transport"):
             del_trans = st.selectbox("Select to delete:", transport_list, key="del_trans_sel")
             if st.button("Delete", key="del_trans_btn"):
-                execute_write("DELETE FROM transport_options WHERE name = ?", [del_trans])
+                run_query("DELETE FROM transport_options WHERE name = ?", (del_trans,))
                 st.rerun()
 
     with col4:
@@ -851,22 +836,24 @@ elif menu_selection == "⚙️ System Settings":
         if st.button("Save Team"):
             if new_team != "":
                 try:
-                    execute_write("INSERT INTO teams (name) VALUES (?)", [new_team.strip()])
+                    run_query("INSERT INTO teams (name) VALUES (?)", (new_team.strip(),))
                     st.success("Team Added!")
                     st.rerun()
-                except Exception as e:
+                except sqlite3.IntegrityError:
                     st.error("Team exists!")
 
         with st.expander("🗑️ Delete Team"):
             del_team = st.selectbox("Select to delete:", teams_list, key="del_team_sel")
             if st.button("Delete", key="del_team_btn"):
-                execute_write("DELETE FROM teams WHERE name = ?", [del_team])
+                run_query("DELETE FROM teams WHERE name = ?", (del_team,))
                 st.rerun()
 
 elif menu_selection == "👤 Manage Users":
     st.title("👤 Manage Users")
     
-    users_df = pd.DataFrame(execute_read("SELECT id, username, role FROM users"))
+    conn = sqlite3.connect(DB_PATH)
+    users_df = pd.read_sql_query("SELECT id, username, role FROM users", conn)
+    conn.close()
     
     col1, col2 = st.columns(2)
     with col1:
@@ -885,10 +872,10 @@ elif menu_selection == "👤 Manage Users":
                     st.error("Please fill out all fields.")
                 else:
                     try:
-                        execute_write("INSERT INTO users (username, pin, role) VALUES (?, ?, ?)", [new_user, new_pin, new_role])
+                        run_query("INSERT INTO users (username, pin, role) VALUES (?, ?, ?)", (new_user, new_pin, new_role))
                         st.success(f"User '{new_user}' created successfully!")
                         st.rerun()
-                    except Exception as e:
+                    except sqlite3.IntegrityError:
                         st.error("That username already exists!")
                         
         st.divider()
@@ -899,6 +886,6 @@ elif menu_selection == "👤 Manage Users":
             else:
                 user_to_delete = st.selectbox("Select user to remove:", delete_candidates)
                 if st.button("Delete User", type="primary"):
-                    execute_write("DELETE FROM users WHERE username = ?", [user_to_delete])
+                    run_query("DELETE FROM users WHERE username = ?", (user_to_delete,))
                     st.success(f"Deleted user '{user_to_delete}'")
                     st.rerun()
