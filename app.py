@@ -3,12 +3,13 @@ import pandas as pd
 import sqlite3
 import datetime
 import time
+import base64
 from pathlib import Path
 import streamlit.components.v1 as components
 
-# --- BRANDING ---
-LOGO_URL = "https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w"
-st.set_page_config(page_title="TG Schedule", page_icon=LOGO_URL, layout="wide", initial_sidebar_state="collapsed")
+# --- BRANDING & PAGE CONFIG ---
+DEFAULT_LOGO_URL = "https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w"
+st.set_page_config(page_title="TurfWorx Dashboard", layout="wide", initial_sidebar_state="collapsed")
 
 # --- CUSTOM CSS FOR SIDEBAR & LAYOUT ---
 st.markdown("""
@@ -18,6 +19,10 @@ st.markdown("""
                 min-width: 220px !important;
                 max-width: 220px !important;
             }
+        }
+        /* Make the dialogs wider */
+        div[data-modal-container='true'] > div {
+            min-width: 80vw !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -63,7 +68,7 @@ if "user_role" not in st.session_state:
     st.session_state.user_role = None
 
 # --- DATABASE SETUP (SQLITE) ---
-DB_PATH = Path("turf_orders_v11.db")
+DB_PATH = Path("turf_orders_v12.db")
 
 def run_query(query, params=()):
     conn = sqlite3.connect(DB_PATH)
@@ -119,7 +124,6 @@ def init_database():
     cursor.execute("CREATE TABLE IF NOT EXISTS varieties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS pallet_sizes (id INTEGER PRIMARY KEY AUTOINCREMENT, size INTEGER UNIQUE NOT NULL)")
     
-    # New Transport Table with Capacity limits
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transport_options (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -137,6 +141,14 @@ def init_database():
             role TEXT NOT NULL
         )
     """)
+
+    # New Config Table for Logos and branding
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS system_config (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
     
     cursor.execute("SELECT COUNT(*) FROM customers")
     if cursor.fetchone()[0] == 0:
@@ -145,8 +157,6 @@ def init_database():
         cursor.execute("INSERT INTO contacts (site_address, contact_name, phone) VALUES (?, ?, ?)", ("123 Spring St, Melbourne", "Dave Foreman", "0412 345 678"))
         cursor.executemany("INSERT INTO varieties (name) VALUES (?)", [("Kikuyu",), ("Santa Anna Couch",), ("Buffalo",)])
         cursor.executemany("INSERT INTO pallet_sizes (size) VALUES (?)", [(60,), (70,), (80,)])
-        
-        # Seed transport with dynamic capacity values
         cursor.executemany("INSERT INTO transport_options (name, pallet_capacity) VALUES (?, ?)", [("Fleet Truck #1", 30), ("Fleet Truck #2", 30), ("TBA", 0)])
         cursor.executemany("INSERT INTO teams (name) VALUES (?)", [("Install Team Alpha",), ("Install Team Bravo",), ("TBA",)])
     
@@ -157,7 +167,7 @@ def init_database():
     conn.commit()
     conn.close()
 
-# --- DATABASE HELPER FUNCTIONS ---
+# --- HELPER FUNCTIONS ---
 def get_customers(): return [row[0] for row in run_query("SELECT name FROM customers ORDER BY name ASC")]
 def get_sites_for_customer(customer_name): return [row[0] for row in run_query("SELECT site_address FROM sites WHERE customer_name = ?", (customer_name,))]
 def get_contacts_for_site(site_address):
@@ -168,12 +178,17 @@ def get_pallet_sizes(): return [row[0] for row in run_query("SELECT size FROM pa
 def get_transport_options(): return [row[0] for row in run_query("SELECT name FROM transport_options ORDER BY name ASC")]
 def get_teams(): return [row[0] for row in run_query("SELECT name FROM teams ORDER BY name ASC")]
 
-# Function to calculate total capacity of active fleet
 def get_total_fleet_capacity():
     result = run_query("SELECT SUM(pallet_capacity) FROM transport_options")
     if result and result[0][0] is not None:
         return int(result[0][0])
-    return 60 # Fallback default
+    return 60 
+
+def get_org_logo():
+    res = run_query("SELECT value FROM system_config WHERE key='org_logo'")
+    if res and res[0][0]:
+        return f"data:image/png;base64,{res[0][0]}"
+    return DEFAULT_LOGO_URL
 
 def save_new_order(customer, po, site, contact, phone, special, service, transport, team, pin, variety, m2_area, pallet_size, full_pallets, loose_rolls, harvest, install, status):
     existing_sites = get_sites_for_customer(customer)
@@ -193,6 +208,145 @@ def save_new_order(customer, po, site, contact, phone, special, service, transpo
 
 init_database()
 
+# Fetch active dynamic variables
+ORG_LOGO = get_org_logo()
+FLEET_MAX_CAPACITY = get_total_fleet_capacity()
+pallet_options = get_pallet_sizes()
+varieties = get_varieties()
+transport_list = get_transport_options()
+teams_list = get_teams()
+service_options = ["Supply Only", "Supply & Deliver", "Supply & Install"]
+role_options = ["👑 Ops Manager/Admin", "🚜 Farm Staff", "👷 Site Supervisors", "🚚 Linehaul Drivers", "🛠️ Installers"]
+
+
+# =====================================================================
+# SINGLE POP-UP DIALOG FOR NEW ORDERS (TURFWORX EXCLUSIVE)
+# =====================================================================
+@st.dialog("➕ Queue New Dispatch Order")
+def add_new_order_dialog():
+    tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=False)
+    
+    r1_col1, r1_col2 = st.columns(2)
+    with r1_col1:
+        if not tba_dates:
+            install_date = st.date_input("1. Install Date", value=None, format="DD/MM/YYYY")
+            default_harvest = (install_date - datetime.timedelta(days=1)) if install_date else None
+            harvest_date = st.date_input("2. Harvest Date (Auto)", value=default_harvest, format="DD/MM/YYYY")
+        else:
+            install_date = None
+            harvest_date = None
+            st.info("No dates selected (Pending Pipeline)")
+    with r1_col2:
+        customers = get_customers()
+        selected_customer = st.selectbox("3. Select Customer", customers, index=None, placeholder="Choose a Customer...")
+
+    r2_col1, r2_col2 = st.columns(2)
+    with r2_col1:
+        selected_service = st.selectbox("4. Service Required", service_options, index=None, placeholder="Select Service...")
+    with r2_col2:
+        variety = st.selectbox("5. Turf Variety", varieties, index=None, placeholder="Select Variety...")
+
+    r3_col1, r3_col2 = st.columns(2)
+    with r3_col1:
+        m2_area = st.number_input("6. Total Qty Required (M2)", min_value=10, step=10, value=None, placeholder="Enter total area...")
+    with r3_col2:
+        selected_team = st.selectbox("7. Team Assigned (Optional)", teams_list, index=None, placeholder="Leave blank if unknown...")
+
+    # Dynamic Transport Logic built inline!
+    r4_col1, r4_col2 = st.columns(2)
+    with r4_col1:
+        transport_options_extended = transport_list + ["➕ Add New Transport / Subbie"]
+        selected_transport = st.selectbox("8. Transport / Fleet", transport_options_extended, index=None, placeholder="Select or Add New...")
+        
+        if selected_transport == "➕ Add New Transport / Subbie":
+            new_fleet_name = st.text_input("Enter New Fleet Name:")
+            new_fleet_cap = st.number_input("Fleet Pallet Capacity:", min_value=1, value=30, step=1)
+        else:
+            new_fleet_name = ""
+            new_fleet_cap = 30
+            
+    with r4_col2:
+        existing_sites = get_sites_for_customer(selected_customer) if selected_customer else []
+        site_options = existing_sites + ["➕ Add New Site Address"] if existing_sites else ["➕ Add New Site Address"]
+        
+        selected_site_option = st.selectbox("9. Job Site Address", site_options, index=None, placeholder="Select or Add New...")
+        
+        if selected_site_option == "➕ Add New Site Address":
+            final_site = st.text_input("Type New Job Site Address:")
+        else:
+            final_site = selected_site_option if selected_site_option else ""
+
+    r5_col1, r5_col2 = st.columns(2)
+    with r5_col1:
+        if final_site and final_site != "➕ Add New Site Address":
+            existing_contacts = get_contacts_for_site(final_site)
+            contact_options = [c["name"] for c in existing_contacts] + ["➕ Add New Contact"] if existing_contacts else ["➕ Add New Contact"]
+        else:
+            existing_contacts = []
+            contact_options = ["➕ Add New Contact"]
+            
+        selected_contact_option = st.selectbox("10. Site Contact (Optional)", contact_options, index=None, placeholder="Select or Add New...")
+        
+        if selected_contact_option == "➕ Add New Contact":
+            sc_col1, sc_col2 = st.columns(2)
+            with sc_col1:
+                final_contact = st.text_input("Contact Name (Optional):")
+            with sc_col2:
+                final_phone = st.text_input("Contact Phone (Optional):")
+        else:
+            final_contact = selected_contact_option if selected_contact_option else ""
+            final_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "") if final_contact else ""
+            if final_contact:
+                st.text_input("Phone Number:", value=final_phone, disabled=True)
+                
+    with r5_col2:
+        po_number = st.text_input("11. Customer PO (Optional)", placeholder="e.g. PO-99214")
+        parking_pin = st.text_input("📍 B-Double Parking Pin Link (Optional)", placeholder="Paste Google Maps link here...")
+
+    st.divider()
+    r6_col1, r6_col2 = st.columns(2)
+    with r6_col1:
+        selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options, index=0)
+    with r6_col2:
+        special_instructions = st.text_area("Special Instructions (Optional)", placeholder="e.g. gate code is 1234...")
+
+    if st.button("💾 Save New Order & Calculate Pallets", type="primary", use_container_width=True):
+        if not selected_customer: st.error("Please select a Customer!")
+        elif final_site.strip() == "": st.error("Please enter a Job Site address!")
+        elif not selected_service: st.error("Please select a Service Required!")
+        elif not variety: st.error("Please select a Turf Variety!")
+        elif not m2_area: st.error("Please enter a Total M2 Area!")
+        elif not selected_pallet: st.error("Please select a Pallet Size!")
+        elif not tba_dates and (not harvest_date or not install_date): st.error("Please select both Harvest and Install dates!")
+        elif selected_transport == "➕ Add New Transport / Subbie" and not new_fleet_name.strip():
+            st.error("Please enter a name for the new Transport/Subbie!")
+        else:
+            # Handle inline dynamic fleet creation
+            if selected_transport == "➕ Add New Transport / Subbie":
+                run_query("INSERT OR IGNORE INTO transport_options (name, pallet_capacity) VALUES (?, ?)", (new_fleet_name.strip(), new_fleet_cap))
+                clean_transport = new_fleet_name.strip()
+            else:
+                clean_transport = selected_transport if selected_transport else "TBA"
+
+            full_pallets = int(m2_area // selected_pallet)
+            loose_rolls = int(m2_area % selected_pallet)
+            
+            harvest_str = harvest_date.strftime("%Y-%m-%d") if harvest_date else ""
+            install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
+            status = "Locked" if harvest_date else "Pending"
+            
+            clean_contact = final_contact if final_contact else ""
+            clean_phone = final_phone if final_phone else ""
+            clean_team = selected_team if selected_team else ""
+            clean_pin = parking_pin if parking_pin else ""
+            
+            save_new_order(selected_customer, po_number, final_site, clean_contact, clean_phone, special_instructions, selected_service, clean_transport, clean_team, clean_pin, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
+            
+            st.session_state.scroll_to_top = True
+            st.toast("✅ Order queued successfully!", icon="🚜")
+            time.sleep(0.5)
+            st.rerun() # Closes the pop-up and refreshes the dashboard
+
 
 # =====================================================================
 # LOGIN SCREEN ENFORCEMENT
@@ -202,7 +356,8 @@ if not st.session_state.logged_in:
     col1, col2, col3 = st.columns([1, 1.5, 1])
     
     with col2:
-        st.image(LOGO_URL, use_container_width=True)
+        st.image(ORG_LOGO, use_container_width=True)
+        st.markdown("<div style='text-align: center; color: #888; font-size: 0.8rem; margin-top: -10px; margin-bottom: 20px;'>Powered by <b>TurfWorx</b></div>", unsafe_allow_html=True)
         st.markdown("<h3 style='text-align: center;'>Schedule & Dispatch Login</h3>", unsafe_allow_html=True)
         
         with st.form("login_form"):
@@ -228,19 +383,9 @@ if not st.session_state.logged_in:
 # MAIN APP (Only runs if logged in)
 # =====================================================================
 
-# --- DYNAMIC LISTS ---
-pallet_options = get_pallet_sizes()
-varieties = get_varieties()
-transport_list = get_transport_options()
-teams_list = get_teams()
-service_options = ["Supply Only", "Supply & Deliver", "Supply & Install"]
-role_options = ["👑 Ops Manager/Admin", "🚜 Farm Staff", "👷 Site Supervisors", "🚚 Linehaul Drivers", "🛠️ Installers"]
-
-# Fetch Dynamic Fleet Capacity Limit
-FLEET_MAX_CAPACITY = get_total_fleet_capacity()
-
 # --- SIDEBAR LOGO & HOME BUTTON ---
-st.sidebar.image(LOGO_URL, use_container_width=True)
+st.sidebar.image(ORG_LOGO, use_container_width=True)
+st.sidebar.markdown("<div style='text-align: center; color: #888; font-size: 0.8rem; margin-top: -10px; margin-bottom: 20px;'>Powered by <b>TurfWorx</b></div>", unsafe_allow_html=True)
 
 if st.sidebar.button("🏠 Home / Reset View", use_container_width=True, type="primary"):
     st.session_state.editing_order = None
@@ -261,7 +406,7 @@ user_role = st.session_state.user_role
 # --- DYNAMIC MAIN MENU ---
 st.sidebar.title("Navigation")
 if user_role == "👑 Ops Manager/Admin":
-    menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet", "➕ Enter New Order", "👥 Manage Customers", "⚙️ System Settings", "👤 Manage Users"]
+    menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet", "👥 Manage Customers", "⚙️ System Settings", "👤 Manage Users"]
 else: 
     menu_options = ["📊 Pipeline Dashboard", "📋 Daily Run Sheet"]
 
@@ -272,9 +417,9 @@ menu_selection = st.sidebar.radio("Main Menu:", menu_options, index=index_select
 st.sidebar.markdown("<br><br>", unsafe_allow_html=True)
 st.sidebar.markdown(
     "<div style='font-size: 0.75rem; color: #6c757d; line-height: 1.3; text-align: center; border-top: 1px solid #444; padding-top: 10px;'>"
-    "Intellectual Property 2026.<br>"
+    "TurfWorx SaaS Enterprise Platform.<br>"
     "Independently developed & owned by <b>Steven Mitchell</b>.<br>"
-    "Licensed exclusively for internal use by Turf Galore."
+    "Licensed exclusively for internal use."
     "</div>", 
     unsafe_allow_html=True
 )
@@ -447,7 +592,14 @@ if st.session_state.editing_order is not None:
 # ROUTING LOGIC BASED ON MENU (Only runs if NOT drilling down)
 # =====================================================================
 elif menu_selection == "📊 Pipeline Dashboard":
-    st.title("🚜 Ops Dashboard")
+    head_col, act_col = st.columns([3, 1])
+    with head_col:
+        st.title("🚜 Ops Dashboard")
+    with act_col:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if user_role == "👑 Ops Manager/Admin":
+            if st.button("➕ Add New Order", type="primary", use_container_width=True):
+                add_new_order_dialog()
     
     col_filter, _ = st.columns([1, 3])
     with col_filter:
@@ -620,111 +772,6 @@ elif menu_selection == "📋 Daily Run Sheet":
             st.session_state.scroll_to_top = True
             st.rerun()
 
-elif menu_selection == "➕ Enter New Order":
-    st.title("➕ Queue New Order")
-    
-    tba_dates = st.checkbox("Send to Pending Pipeline (No Dates)", value=False)
-    
-    r1_col1, r1_col2 = st.columns(2)
-    with r1_col1:
-        if not tba_dates:
-            install_date = st.date_input("1. Install Date", value=None, format="DD/MM/YYYY")
-            default_harvest = (install_date - datetime.timedelta(days=1)) if install_date else None
-            harvest_date = st.date_input("2. Harvest Date (Auto)", value=default_harvest, format="DD/MM/YYYY")
-        else:
-            install_date = None
-            harvest_date = None
-            st.info("No dates selected (Pending Pipeline)")
-    with r1_col2:
-        customers = get_customers()
-        selected_customer = st.selectbox("3. Select Customer", customers, index=None, placeholder="Choose a Customer...")
-
-    r2_col1, r2_col2 = st.columns(2)
-    with r2_col1:
-        selected_service = st.selectbox("4. Service Required", service_options, index=None, placeholder="Select Service...")
-    with r2_col2:
-        variety = st.selectbox("5. Turf Variety", varieties, index=None, placeholder="Select Variety...")
-
-    r3_col1, r3_col2 = st.columns(2)
-    with r3_col1:
-        m2_area = st.number_input("6. Total Qty Required (M2)", min_value=10, step=10, value=None, placeholder="Enter total area...")
-    with r3_col2:
-        selected_team = st.selectbox("7. Team Assigned (Optional)", teams_list, index=None, placeholder="Leave blank if unknown...")
-
-    r4_col1, r4_col2 = st.columns(2)
-    with r4_col1:
-        selected_transport = st.selectbox("8. Transport / Fleet (Optional)", transport_list, index=None, placeholder="Leave blank if unknown...")
-    with r4_col2:
-        existing_sites = get_sites_for_customer(selected_customer) if selected_customer else []
-        site_options = existing_sites + ["➕ Add New Site Address"] if existing_sites else ["➕ Add New Site Address"]
-        
-        selected_site_option = st.selectbox("9. Job Site Address", site_options, index=None, placeholder="Select or Add New...")
-        
-        if selected_site_option == "➕ Add New Site Address":
-            final_site = st.text_input("Type New Job Site Address:")
-        else:
-            final_site = selected_site_option if selected_site_option else ""
-
-    r5_col1, r5_col2 = st.columns(2)
-    with r5_col1:
-        if final_site and final_site != "➕ Add New Site Address":
-            existing_contacts = get_contacts_for_site(final_site)
-            contact_options = [c["name"] for c in existing_contacts] + ["➕ Add New Contact"] if existing_contacts else ["➕ Add New Contact"]
-        else:
-            existing_contacts = []
-            contact_options = ["➕ Add New Contact"]
-            
-        selected_contact_option = st.selectbox("10. Site Contact (Optional)", contact_options, index=None, placeholder="Select or Add New...")
-        
-        if selected_contact_option == "➕ Add New Contact":
-            sc_col1, sc_col2 = st.columns(2)
-            with sc_col1:
-                final_contact = st.text_input("Contact Name (Optional):")
-            with sc_col2:
-                final_phone = st.text_input("Contact Phone (Optional):")
-        else:
-            final_contact = selected_contact_option if selected_contact_option else ""
-            final_phone = next((c["phone"] for c in existing_contacts if c["name"] == final_contact), "") if final_contact else ""
-            if final_contact:
-                st.text_input("Phone Number:", value=final_phone, disabled=True)
-                
-    with r5_col2:
-        po_number = st.text_input("11. Customer PO (Optional)", placeholder="e.g. PO-99214")
-        parking_pin = st.text_input("📍 B-Double Parking Pin Link (Optional)", placeholder="Paste Google Maps link here...")
-
-    st.divider()
-    r6_col1, r6_col2 = st.columns(2)
-    with r6_col1:
-        selected_pallet = st.selectbox("Pallet Capacity Size (M2)", pallet_options, index=0)
-    with r6_col2:
-        special_instructions = st.text_area("Special Instructions (Optional)", placeholder="e.g. gate code is 1234...")
-
-    if st.button("💾 Save New Order & Calculate Pallets"):
-        if not selected_customer: st.error("Please select a Customer!")
-        elif final_site.strip() == "": st.error("Please enter a Job Site address!")
-        elif not selected_service: st.error("Please select a Service Required!")
-        elif not variety: st.error("Please select a Turf Variety!")
-        elif not m2_area: st.error("Please enter a Total M2 Area!")
-        elif not selected_pallet: st.error("Please select a Pallet Size!")
-        elif not tba_dates and (not harvest_date or not install_date): st.error("Please select both Harvest and Install dates!")
-        else:
-            full_pallets = int(m2_area // selected_pallet)
-            loose_rolls = int(m2_area % selected_pallet)
-            
-            harvest_str = harvest_date.strftime("%Y-%m-%d") if harvest_date else ""
-            install_str = install_date.strftime("%Y-%m-%d") if install_date else ""
-            status = "Locked" if harvest_date else "Pending"
-            
-            clean_contact = final_contact if final_contact else ""
-            clean_phone = final_phone if final_phone else ""
-            clean_transport = selected_transport if selected_transport else "TBA"
-            clean_team = selected_team if selected_team else ""
-            clean_pin = parking_pin if parking_pin else ""
-            
-            save_new_order(selected_customer, po_number, final_site, clean_contact, clean_phone, special_instructions, selected_service, clean_transport, clean_team, clean_pin, variety, m2_area, selected_pallet, full_pallets, loose_rolls, harvest_str, install_str, status)
-            st.session_state.scroll_to_top = True
-            st.success(f"Order saved! 🚜 Calculated: {full_pallets} Full Pallets + {loose_rolls} Loose Rolls.")
-
 elif menu_selection == "👥 Manage Customers":
     st.title("👥 Manage Customers")
     customers = get_customers()
@@ -757,6 +804,30 @@ elif menu_selection == "👥 Manage Customers":
 
 elif menu_selection == "⚙️ System Settings":
     st.title("⚙️ System Settings")
+    
+    st.subheader("🎨 Custom Organization Branding")
+    st.markdown("Upload a client logo to personalize this instance. The 'Powered by TurfWorx' watermark will automatically apply below it.")
+    
+    col_up1, col_up2 = st.columns(2)
+    with col_up1:
+        uploaded_logo = st.file_uploader("Upload Client Logo", type=["png", "jpg", "jpeg"], help="For best results, use a wide logo with a transparent background.")
+        if uploaded_logo is not None:
+            if st.button("💾 Apply Custom Logo", type="primary"):
+                encoded_string = base64.b64encode(uploaded_logo.read()).decode("utf-8")
+                run_query("INSERT OR REPLACE INTO system_config (key, value) VALUES (?, ?)", ("org_logo", encoded_string))
+                st.success("Logo applied successfully!")
+                time.sleep(0.5)
+                st.rerun()
+                
+    with col_up2:
+        st.markdown("**Current Active Logo Preview:**")
+        st.image(ORG_LOGO, width=200)
+        st.markdown("<div style='color: #888; font-size: 0.8rem; margin-top: -10px;'>Powered by <b>TurfWorx</b></div>", unsafe_allow_html=True)
+        if st.button("🔄 Reset to Default Logo"):
+            run_query("DELETE FROM system_config WHERE key = 'org_logo'")
+            st.rerun()
+            
+    st.divider()
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -836,7 +907,7 @@ elif menu_selection == "⚙️ System Settings":
         if st.button("Save Team"):
             if new_team != "":
                 try:
-                    run_query("INSERT INTO teams (name) VALUES (?)", (new_team.strip(),))
+                    run_query("INSERT INTO teams (name) VALUES (?, ?)", (new_team.strip(),))
                     st.success("Team Added!")
                     st.rerun()
                 except sqlite3.IntegrityError:
