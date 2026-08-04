@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="240" viewBox="0 0 960 240" role="img" aria-labelledby="title description">
+  <title id="title">TurfHelm</title>
+  <desc id="description">TurfHelm wordmark with a green helm emblem.</desc>
+  <rect width="960" height="240" rx="28" fill="#0f1720"/>
+  <circle cx="125" cy="120" r="72" fill="none" stroke="#39b86a" stroke-width="18"/>
+  <path d="M125 48v144M53 120h144M74 69l102 102M176 69L74 171" stroke="#39b86a" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="125" cy="120" r="22" fill="#f4f7f5" stroke="#39b86a" stroke-width="10"/>
+  <text x="235" y="145" fill="#f4f7f5" font-family="Arial, Helvetica, sans-serif" font-size="92" font-weight="700" letter-spacing="1">TurfHelm</text>
+  <text x="240" y="190" fill="#92a49a" font-family="Arial, Helvetica, sans-serif" font-size="24" letter-spacing="4">OPERATIONS UNDER CONTROL</text>
+</svg>

@@ -7,9 +7,15 @@ import base64
 from pathlib import Path
 import streamlit.components.v1 as components
 
+from turfhelm.ui.auth_gate import render_secure_entry
+
 # --- BRANDING & PAGE CONFIG ---
-DEFAULT_LOGO_URL = "https://images.squarespace-cdn.com/content/v1/5f0d39504a2fa25485e8cdb8/1594704338146-Y44FGCD2TIX74KDGUFST/TurfGalore-LOGO-text_x50%402x.png?format=1500w"
-st.set_page_config(page_title="TurfWorx Dashboard", layout="wide", initial_sidebar_state="collapsed")
+DEFAULT_LOGO_URL = str(Path(__file__).parent / "assets" / "turfhelm-logo.svg")
+st.set_page_config(page_title="TurfHelm Dashboard", layout="wide", initial_sidebar_state="collapsed")
+
+# --- MANAGED AUTHENTICATION GATE ---
+# Stop before legacy session setup, schema creation, or business queries.
+render_secure_entry(st)
 
 # --- CUSTOM CSS FOR SIDEBAR & LAYOUT ---
 st.markdown("""
@@ -220,7 +226,7 @@ role_options = ["👑 Ops Manager/Admin", "🚜 Farm Staff", "👷 Site Supervis
 
 
 # =====================================================================
-# SINGLE POP-UP DIALOG FOR NEW ORDERS (TURFWORX EXCLUSIVE)
+# SINGLE POP-UP DIALOG FOR NEW ORDERS (TURFHELM EXCLUSIVE)
 # =====================================================================
 @st.dialog("➕ Queue New Dispatch Order")
 def add_new_order_dialog():
@@ -357,7 +363,7 @@ if not st.session_state.logged_in:
     
     with col2:
         st.image(ORG_LOGO, use_container_width=True)
-        st.markdown("<div style='text-align: center; color: #888; font-size: 0.8rem; margin-top: -10px; margin-bottom: 20px;'>Powered by <b>TurfWorx</b></div>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align: center; color: #888; font-size: 0.8rem; margin-top: -10px; margin-bottom: 20px;'>Powered by <b>TurfHelm</b></div>", unsafe_allow_html=True)
         st.markdown("<h3 style='text-align: center;'>Schedule & Dispatch Login</h3>", unsafe_allow_html=True)
         
         with st.form("login_form"):
@@ -385,7 +391,7 @@ if not st.session_state.logged_in:
 
 # --- SIDEBAR LOGO & HOME BUTTON ---
 st.sidebar.image(ORG_LOGO, use_container_width=True)
-st.sidebar.markdown("<div style='text-align: center; color: #888; font-size: 0.8rem; margin-top: -10px; margin-bottom: 20px;'>Powered by <b>TurfWorx</b></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='text-align: center; color: #888; font-size: 0.8rem; margin-top: -10px; margin-bottom: 20px;'>Powered by <b>TurfHelm</b></div>", unsafe_allow_html=True)
 
 if st.sidebar.button("🏠 Home / Reset View", use_container_width=True, type="primary"):
     st.session_state.editing_order = None
@@ -417,7 +423,7 @@ menu_selection = st.sidebar.radio("Main Menu:", menu_options, index=index_select
 st.sidebar.markdown("<br><br>", unsafe_allow_html=True)
 st.sidebar.markdown(
     "<div style='font-size: 0.75rem; color: #6c757d; line-height: 1.3; text-align: center; border-top: 1px solid #444; padding-top: 10px;'>"
-    "TurfWorx SaaS Enterprise Platform.<br>"
+    "TurfHelm SaaS Enterprise Platform.<br>"
     "Independently developed & owned by <b>Steven Mitchell</b>.<br>"
     "Licensed exclusively for internal use."
     "</div>", 
@@ -437,7 +443,11 @@ if st.session_state.editing_order is not None:
     order_id = st.session_state.editing_order
     
     conn = sqlite3.connect(DB_PATH)
-    order_df = pd.read_sql_query(f"SELECT * FROM orders WHERE id = {order_id}", conn)
+    order_df = pd.read_sql_query(
+        "SELECT * FROM orders WHERE id = ?",
+        conn,
+        params=(order_id,),
+    )
     conn.close()
     
     if order_df.empty:
@@ -727,7 +737,17 @@ elif menu_selection == "📋 Daily Run Sheet":
     
     conn = sqlite3.connect(DB_PATH)
     
-    cap_res = pd.read_sql_query(f"SELECT SUM(full_pallets) as tot_full, SUM(CASE WHEN loose_rolls > 0 THEN 1 ELSE 0 END) as tot_loose FROM orders WHERE harvest_date = '{target_date_str}' AND status NOT IN ('Cancelled')", conn)
+    cap_res = pd.read_sql_query(
+        """
+        SELECT
+            SUM(full_pallets) AS tot_full,
+            SUM(CASE WHEN loose_rolls > 0 THEN 1 ELSE 0 END) AS tot_loose
+        FROM orders
+        WHERE harvest_date = ? AND status != 'Cancelled'
+        """,
+        conn,
+        params=(target_date_str,),
+    )
     run_tot_pallets = int(cap_res.iloc[0]['tot_full'] or 0) + int(cap_res.iloc[0]['tot_loose'] or 0)
     
     harvests = pd.read_sql_query("SELECT id, customer, purchase_order, service_type, team_assigned, transport_detail, site_address, site_contact, contact_phone, variety, m2_area, full_pallets, loose_rolls, special_instructions, status, amount_harvested, amount_installed FROM orders WHERE harvest_date = ? AND status != 'Cancelled'", conn, params=(target_date_str,))
@@ -806,7 +826,7 @@ elif menu_selection == "⚙️ System Settings":
     st.title("⚙️ System Settings")
     
     st.subheader("🎨 Custom Organization Branding")
-    st.markdown("Upload a client logo to personalize this instance. The 'Powered by TurfWorx' watermark will automatically apply below it.")
+    st.markdown("Upload a client logo to personalize this instance. The 'Powered by TurfHelm' watermark will automatically apply below it.")
     
     col_up1, col_up2 = st.columns(2)
     with col_up1:
@@ -822,7 +842,7 @@ elif menu_selection == "⚙️ System Settings":
     with col_up2:
         st.markdown("**Current Active Logo Preview:**")
         st.image(ORG_LOGO, width=200)
-        st.markdown("<div style='color: #888; font-size: 0.8rem; margin-top: -10px;'>Powered by <b>TurfWorx</b></div>", unsafe_allow_html=True)
+        st.markdown("<div style='color: #888; font-size: 0.8rem; margin-top: -10px;'>Powered by <b>TurfHelm</b></div>", unsafe_allow_html=True)
         if st.button("🔄 Reset to Default Logo"):
             run_query("DELETE FROM system_config WHERE key = 'org_logo'")
             st.rerun()
