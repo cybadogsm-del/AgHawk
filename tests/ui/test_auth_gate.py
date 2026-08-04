@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
 import pytest
+from streamlit.errors import StreamlitAuthError
 
 from turfhelm.ui.auth_gate import render_secure_entry
 
@@ -18,6 +19,7 @@ class FakeUser:
 class FakeStreamlit:
     logged_in: bool
     login_clicked: bool = False
+    login_error: bool = False
     calls: list[tuple[str, object]] = field(default_factory=list)
 
     @property
@@ -33,12 +35,17 @@ class FakeStreamlit:
     def info(self, value: str) -> None:
         self.calls.append(("info", value))
 
+    def error(self, value: str) -> None:
+        self.calls.append(("error", value))
+
     def button(self, label: str, *, type: str) -> bool:
         self.calls.append(("button", (label, type)))
         return self.login_clicked
 
     def login(self, provider: str) -> None:
         self.calls.append(("login", provider))
+        if self.login_error:
+            raise StreamlitAuthError("Authentication provider is not configured.")
 
     def stop(self) -> None:
         self.calls.append(("stop", None))
@@ -63,6 +70,20 @@ def test_login_button_uses_auth0_and_execution_stops() -> None:
         render_secure_entry(ui)
 
     assert ("login", "auth0") in ui.calls
+    assert ui.calls[-1] == ("stop", None)
+
+
+def test_missing_auth0_configuration_fails_closed_without_traceback() -> None:
+    ui = FakeStreamlit(logged_in=False, login_clicked=True, login_error=True)
+
+    with pytest.raises(ExecutionStopped):
+        render_secure_entry(ui)
+
+    assert (
+        "error",
+        "Authentication is not configured. Add real Auth0 credentials to "
+        "`.streamlit/secrets.toml` using `.streamlit/secrets.toml.example`.",
+    ) in ui.calls
     assert ui.calls[-1] == ("stop", None)
 
 
