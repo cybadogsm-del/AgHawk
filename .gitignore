@@ -1,0 +1,6 @@
+aghawk.db
+__pycache__/
+pycache/
+venv/
+.venv/
+*.pyc
